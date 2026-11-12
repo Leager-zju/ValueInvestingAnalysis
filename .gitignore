@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+
+# 编辑器 / 系统
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# 本地持仓与报告数据（隐私，永不入库）
+portfolio.json
+analysis_log.jsonl
+reports/
+_tmp/
+*.log

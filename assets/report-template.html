@@ -1,0 +1,580 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>示例公司（SH000000）价值分析报告 · 示例</title>
+<!--
+  价值投资分析报表版式模板（单文件、自包含、可离线双击打开）
+  ────────────────────────────────────────────────────────────
+  用法：
+  1. 复制本文件到 reports/<代码>-<日期>-<deep|open|close>.html
+  2. 只替换文字与数字，不要改动样式表与 class 结构（注释里禁止出现 style 标签的字面写法）
+  3. 区块按需删除：
+     · 深度报表  → 保留全部区块
+     · 早盘预案  → 删掉「四、估值明细」「六、资金与情绪」，把「八」换成情景预案表
+     · 尾盘决策  → 删掉「三、企业质地」明细（改一行摘要），保留「八」「九」并加「约束核对」区块
+  4. 数字统一用 class="num"（等宽、tabular-nums），红涨绿跌用 .up / .dn
+  5. 估值刻度条：见下方 .zone 区块注释里的百分比公式
+  6. 本文件里的所有数值、日期与标的线索均为占位示例（__XXX__），与任何真实持仓无关；
+     生成报告时必须用脚本计算值与当次工具返回的真实数据全部替换，禁止直接交付本模板。
+-->
+<style>
+  :root{
+    --ink:#0f172a; --ink2:#334155; --muted:#64748b; --faint:#94a3b8;
+    --line:#e5e8ee; --line2:#eef1f5;
+    --bg:#f4f6f9; --card:#ffffff;
+    --up:#d92020; --up-bg:#fdeeee;      /* 涨 = 红 */
+    --dn:#0f8a5f; --dn-bg:#e9f7f1;      /* 跌 = 绿 */
+    --blue:#1a56db; --blue-bg:#eef4ff;
+    --deep:#0b3fa8; --deep-bg:#e6edfd;
+    --gray:#475569; --gray-bg:#f1f5f9;
+    --amber:#b45309; --amber-bg:#fdf3e3;
+    --danger:#b91c1c; --danger-bg:#fdecec;
+    --navy1:#111c33; --navy2:#1d2f52;
+    --r:14px;
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    margin:0; padding:32px 20px 56px;
+    background:
+      radial-gradient(1200px 420px at 50% -180px, #e8eefb 0%, rgba(232,238,251,0) 70%),
+      var(--bg);
+    color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei","Hiragino Sans GB",sans-serif;
+    font-size:14px; line-height:1.65;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1000px;margin:0 auto}
+
+  /* ── 数字排版 ── */
+  .num{font-family:"SF Mono",ui-monospace,"JetBrains Mono","Cascadia Mono",Consolas,monospace;
+       font-variant-numeric:tabular-nums; letter-spacing:-.2px}
+  .up{color:var(--up)} .dn{color:var(--dn)} .flat{color:var(--muted)}
+
+  /* ── 页头 ── */
+  .masthead{
+    position:relative; overflow:hidden;
+    background:linear-gradient(135deg,var(--navy1) 0%,var(--navy2) 62%,#2b4370 100%);
+    color:#fff; border-radius:20px; padding:26px 30px 24px;
+    box-shadow:0 18px 40px -22px rgba(15,23,42,.55);
+  }
+  .masthead::after{
+    content:""; position:absolute; right:-90px; top:-120px; width:320px; height:320px;
+    background:radial-gradient(circle,rgba(90,140,255,.42),rgba(90,140,255,0) 68%);
+  }
+  .mh-top{display:flex;flex-wrap:wrap;align-items:center;gap:12px;position:relative;z-index:1}
+  .mh-name{font-size:23px;font-weight:700;letter-spacing:.4px;margin:0}
+  .mh-code{font-size:12.5px;color:#a9bcda;letter-spacing:1px}
+  .tag{
+    display:inline-flex;align-items:center;gap:6px;
+    font-size:12px;font-weight:600;padding:4px 11px;border-radius:999px;
+    border:1px solid rgba(255,255,255,.22);background:rgba(255,255,255,.1);color:#e8eefb;
+  }
+  .tag.hot{background:rgba(217,32,32,.22);border-color:rgba(255,120,120,.42);color:#ffd7d7}
+  .tag.ok{background:rgba(15,138,95,.22);border-color:rgba(80,200,160,.42);color:#c9f2e2}
+
+  .verdict{
+    position:relative;z-index:1;margin-top:16px;padding:16px 18px;
+    border-radius:12px;background:rgba(255,255,255,.08);
+    border:1px solid rgba(255,255,255,.14);
+    display:flex;flex-wrap:wrap;align-items:baseline;gap:10px 18px;
+  }
+  .verdict .lead{font-size:12px;color:#9db0cf;letter-spacing:2px}
+  .verdict .v{font-size:19px;font-weight:700}
+  .verdict .one{font-size:13.5px;color:#cfdcef;line-height:1.6;flex:1 1 320px;min-width:240px}
+
+  /* 关键指标条 */
+  .kpis{position:relative;z-index:1;display:grid;grid-template-columns:repeat(4,1fr);gap:1px;
+        margin-top:20px;background:rgba(255,255,255,.14);border-radius:12px;overflow:hidden}
+  .kpi{background:rgba(9,17,33,.35);padding:13px 16px}
+  .kpi .k{font-size:11.5px;color:#93a7c7;letter-spacing:1px}
+  .kpi .v{font-size:19px;font-weight:700;margin-top:3px}
+  .kpi .s{font-size:11.5px;color:#8ea2c2;margin-top:2px}
+
+  /* ── 卡片区块 ── */
+  section.card{
+    background:var(--card); border:1px solid var(--line); border-radius:var(--r);
+    padding:22px 26px 24px; margin-top:18px;
+    box-shadow:0 1px 2px rgba(15,23,42,.04),0 12px 26px -22px rgba(15,23,42,.28);
+  }
+  .sec-head{display:flex;align-items:center;gap:12px;margin-bottom:14px}
+  .kicker{
+    flex:0 0 auto;width:26px;height:26px;border-radius:8px;
+    display:grid;place-items:center;font-size:12.5px;font-weight:700;
+    color:#fff;background:linear-gradient(160deg,#2b4370,#1a56db);
+  }
+  .sec-head h2{margin:0;font-size:15.5px;font-weight:700;letter-spacing:.3px}
+  .sec-head .wt{font-size:11.5px;color:var(--faint);border:1px solid var(--line);border-radius:6px;padding:1px 7px}
+  .sec-head .hint{margin-left:auto;font-size:12px;color:var(--muted)}
+
+  /* ── 表格 ── */
+  table{width:100%;border-collapse:collapse;font-size:13.5px}
+  thead th{
+    text-align:left;font-size:11.5px;font-weight:600;color:var(--muted);
+    letter-spacing:.6px;padding:8px 10px;border-bottom:1px solid var(--line);
+    background:#fafbfd;white-space:nowrap;
+  }
+  tbody td{padding:9px 10px;border-bottom:1px solid var(--line2);vertical-align:top}
+  tbody tr:last-child td{border-bottom:none}
+  tbody tr:hover{background:#fbfcfe}
+  td.r,th.r{text-align:right}
+  .em{font-weight:600;color:var(--ink)}
+  tfoot td{padding:10px;border-top:1.5px solid var(--line);font-weight:700;background:#fafbfd}
+
+  /* ── 徽章 ── */
+  .badge{display:inline-block;font-size:12px;font-weight:600;padding:2px 9px;border-radius:999px;white-space:nowrap}
+  .b-buy{color:var(--blue);background:var(--blue-bg)}
+  .b-fair{color:var(--gray);background:var(--gray-bg)}
+  .b-rich{color:var(--amber);background:var(--amber-bg)}
+  .b-over{color:var(--danger);background:var(--danger-bg)}
+  .b-up{color:var(--up);background:var(--up-bg)}
+  .b-dn{color:var(--dn);background:var(--dn-bg)}
+
+  /* ── 评分 ── */
+  .score{display:flex;align-items:center;gap:14px;margin:2px 0 16px}
+  .score .big{font-size:34px;font-weight:800;line-height:1;letter-spacing:-1px}
+  .score .big small{font-size:14px;font-weight:600;color:var(--faint);letter-spacing:0}
+  .score .bar{flex:1;height:9px;border-radius:999px;background:#eef1f6;overflow:hidden}
+  .score .bar i{display:block;height:100%;border-radius:999px;background:linear-gradient(90deg,#1a56db,#3f8cff)}
+  .dots{letter-spacing:3px;font-size:12px;color:#cbd5e1}
+  .dots b{color:#1a56db}
+
+  /* ── 估值刻度条 ── */
+  .zone{margin:22px 0 6px}
+  .zone-bar{position:relative;padding-top:30px}
+  .zone-track{display:flex;height:34px;border-radius:9px;overflow:hidden;border:1px solid var(--line)}
+  .zone-track .z{flex:0 0 auto;display:grid;place-items:center;font-size:11.5px;font-weight:600;letter-spacing:.5px;
+                 border-right:1px solid rgba(255,255,255,.7);overflow:hidden}
+  .zone-track .z:last-child{border-right:none}
+  .z1{background:var(--deep-bg);color:var(--deep)}
+  .z2{background:var(--blue-bg);color:var(--blue)}
+  .z3{background:var(--gray-bg);color:var(--gray)}
+  .z4{background:var(--amber-bg);color:var(--amber)}
+  .z5{background:var(--danger-bg);color:var(--danger)}
+  .marker{position:absolute;top:30px;bottom:0;width:3px;background:#0f172a;border-radius:3px;
+          box-shadow:0 0 0 3px rgba(15,23,42,.16);z-index:2}
+  .marker b{position:absolute;top:-26px;left:50%;transform:translateX(-50%);
+            font-size:11.5px;font-weight:700;background:#0f172a;color:#fff;
+            padding:2px 8px;border-radius:6px;white-space:nowrap}
+  .zone-axis{position:relative;height:17px;margin-top:7px}
+  .zone-axis span{position:absolute;top:0;transform:translateX(-50%);font-size:11px;color:var(--faint);white-space:nowrap}
+
+  /* ── 上行期权 ── */
+  .opt{margin:2px 0 4px}
+  .opt-item{border:1px solid var(--line);border-left:3px solid #9db8f0;border-radius:0 10px 10px 0;
+            padding:11px 14px;margin-bottom:9px;background:#fbfcff}
+  .opt-item .oh{display:flex;justify-content:space-between;align-items:baseline;gap:12px}
+  .opt-item .on{font-weight:700;font-size:13.5px;color:var(--ink)}
+  .opt-item .oc{font-family:"SF Mono",ui-monospace,Consolas,monospace;font-weight:700;color:var(--blue);
+                font-variant-numeric:tabular-nums;white-space:nowrap}
+  .opt-item .om{font-size:12px;color:var(--muted);margin-top:5px;line-height:1.6}
+  .opt-item .om i{font-style:normal;color:var(--ink2);font-weight:600}
+  .opt-sum{display:flex;flex-wrap:wrap;align-items:center;gap:10px 26px;
+           padding:12px 16px;margin-top:4px;border-radius:10px;
+           background:#f5f9ff;border:1px solid #d9e6ff}
+  .opt-sum .k{font-size:11.5px;color:var(--muted);letter-spacing:.5px}
+  .opt-sum .v{font-size:16px;font-weight:700;font-variant-numeric:tabular-nums}
+  .opt-sum .sep{flex:1 1 auto}
+
+  /* ── 提示块 ── */
+  .note{border-left:3px solid var(--blue);background:#f7faff;padding:11px 15px;border-radius:0 8px 8px 0;
+        font-size:13px;color:var(--ink2);margin:12px 0}
+  .note.warn{border-color:var(--amber);background:#fffaf1}
+  .note.danger{border-color:var(--danger);background:#fff6f6}
+  .discipline{
+    margin-top:20px;padding:16px 20px;border-radius:12px;
+    background:linear-gradient(120deg,#111c33,#243a63);color:#e6eefb;
+    font-size:14px;line-height:1.7;position:relative;
+  }
+  .discipline .q{font-size:18px;color:#7fa8ff;font-weight:700;margin-right:8px}
+  .discipline .from{display:block;margin-top:6px;font-size:11.5px;color:#8ea2c2;letter-spacing:1px}
+
+  /* ── 约束核对 ── */
+  .pass,.fail{font-weight:700;font-size:12.5px}
+  .pass{color:var(--dn)} .fail{color:var(--danger)}
+  tr.rowfail{background:#fff8f8}
+
+  /* ── 页脚 ── */
+  footer{margin-top:22px;font-size:11.5px;color:var(--faint);line-height:1.8;text-align:center}
+  footer b{color:var(--muted);font-weight:600}
+
+  @media (max-width:720px){
+    body{padding:18px 12px 40px}
+    .kpis{grid-template-columns:repeat(2,1fr)}
+    .kpi{padding:11px 12px}
+    .kpi .v{font-size:17px}
+    section.card{padding:18px 14px}
+    .masthead{padding:20px 18px;border-radius:16px}
+    .mh-name{font-size:20px}
+    .verdict .v{font-size:17px}
+    table{font-size:12.5px}
+    thead th{white-space:normal;font-size:10.5px;padding:7px 5px;letter-spacing:0}
+    tbody td{padding:8px 5px;word-break:break-word}
+    .num{letter-spacing:0}
+    .zone-axis span{font-size:10px}
+  }
+  @media print{
+    body{background:#fff;padding:0}
+    section.card,.masthead{box-shadow:none;break-inside:avoid}
+  }
+</style>
+</head>
+<body>
+
+<!-- ══════════ 顶部导航（自动，勿删）══════════
+     从本文件名解析 <代码>-<open|close|deep>.html，自动生成回索引与槽位切换。
+     报告与 index.html 同目录，故用相对路径，换机器/换目录都不失效。 -->
+<div id="vi-nav">
+  <a id="vi-back" href="index.html">← 报告索引</a>
+  <span class="vi-sep">|</span>
+  <span id="vi-slots"></span>
+  <span id="vi-name"></span>
+</div>
+<style>
+  #vi-nav{position:sticky;top:0;z-index:999;display:flex;align-items:center;gap:10px;
+    padding:9px 18px;margin:0;background:rgba(255,255,255,.88);
+    -webkit-backdrop-filter:saturate(180%) blur(12px);backdrop-filter:saturate(180%) blur(12px);
+    border-bottom:1px solid #e5e8ee;
+    font:13px/1.4 -apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
+  #vi-nav a{color:#1a56db;text-decoration:none;font-weight:600}
+  #vi-nav a:hover{text-decoration:underline}
+  #vi-nav .vi-sep{color:#cbd5e1}
+  #vi-nav .vi-cur{color:#0f172a;font-weight:700;background:#eef1f6;
+    padding:2px 9px;border-radius:6px}
+  #vi-nav .vi-slot{color:#475569;text-decoration:none;font-weight:500;padding:2px 7px;border-radius:6px}
+  #vi-nav .vi-slot:hover{background:#f1f5f9;text-decoration:none}
+  #vi-nav #vi-name{margin-left:auto;color:#94a3b8;font-size:11.5px;letter-spacing:.5px}
+</style>
+<script>
+(function () {
+  var m = location.pathname.split('/').pop().match(/^(.+)-(open|close|deep)\.html$/i);
+  var box = document.getElementById('vi-slots');
+  if (!m) { return; }
+  var code = m[1], cur = m[2].toLowerCase();
+  var labels = { open: '早盘预案', close: '收盘决策', deep: '深度分析' };
+  ['open', 'close', 'deep'].forEach(function (s) {
+    var el = document.createElement(s === cur ? 'span' : 'a');
+    el.className = (s === cur) ? 'vi-cur' : 'vi-slot';
+    el.textContent = labels[s];
+    if (s !== cur) { el.href = code + '-' + s + '.html'; }
+    box.appendChild(el);
+  });
+  document.getElementById('vi-name').textContent = code.toUpperCase();
+})();
+</script>
+
+<div class="wrap">
+
+  <!-- ══════════ 页头：名称 · 结论 · 关键指标 ══════════ -->
+  <header class="masthead">
+    <div class="mh-top">
+      <h1 class="mh-name">示例公司</h1>
+      <span class="mh-code num">SH000000</span>
+      <span class="tag">上海主板 · 稳定消费</span>
+      <span class="tag ok">质地 9/10 优质</span>
+      <span class="tag hot">合理区</span>
+    </div>
+
+    <div class="verdict">
+      <span class="lead">结论</span>
+      <span class="v">持有，不加仓</span>
+      <span class="one">品牌壁垒未变、现金流与分红稳定，现价处于合理区间中部；尚未进入买入区，也远未触及估值透支线。</span>
+    </div>
+
+    <div class="kpis">
+      <div class="kpi"><div class="k">现价（__DATE__）</div><div class="v num">__PRICE__</div><div class="s num up">__CHG__</div></div>
+      <div class="kpi"><div class="k">持仓成本</div><div class="v num">__COST__</div><div class="s num">__SHARES__ 股 · 成本 __COST_TOTAL__</div></div>
+      <div class="kpi"><div class="k">浮动盈亏</div><div class="v num dn">__PNL__</div><div class="s num dn">__PNL_PCT__</div></div>
+      <div class="kpi"><div class="k">可用资金</div><div class="v num">__CASH__</div><div class="s num">已投入 __INVESTED__%</div></div>
+    </div>
+  </header>
+
+  <!-- ══════════ 一、持仓与资金 ══════════ -->
+  <section class="card">
+    <div class="sec-head"><span class="kicker">1</span><h2>驱动因子</h2><span class="wt">股价由什么驱动</span><span class="hint">判据：它变了，明年的盈利预测会变吗</span></div>
+    <div class="note"><b>因子链</b>：<因子A> →（滞后 N 个月）→ <因子B> → <利润> → 股价</div>
+    <table>
+      <thead><tr><th>因子</th><th>级别</th><th class="num">频率</th><th>领先性</th><th class="num">最新读数</th><th class="num">日期</th><th>变化含义</th></tr></thead>
+      <tbody>
+        <tr><td><因子A></td><td><span class="badge b-buy">core</span></td><td class="num" style="white-space:nowrap">月度</td><td>leading</td><td class="num">xx</td><td class="num" style="white-space:nowrap">__FACTOR_DATE__</td><td><对每股盈利的传导></td></tr>
+        <tr><td><因子B></td><td><span class="badge b-buy">core</span></td><td class="num" style="white-space:nowrap">周度</td><td>coincident</td><td class="num">xx</td><td class="num" style="white-space:nowrap">__FACTOR_DATE__</td><td><同上></td></tr>
+        <tr><td><因子C></td><td><span class="badge b-fair">secondary</span></td><td class="num" style="white-space:nowrap">事件</td><td>leading</td><td class="num">无新公告</td><td class="num">—</td><td><同上></td></tr>
+      </tbody>
+    </table>
+    <div class="note warn"><b>未取到的因子</b>：<名 + 对结论的影响>。因子不全会让结论建立在旧信息上，这一点要比"少写一个指标"严重得多。</div>
+  </section>
+
+  <section class="card">
+    <div class="sec-head"><span class="kicker">2</span><h2>公司性质</h2><span class="wt">仅作因子向导与估值尺子</span><span class="hint">用户已确认 · __DATE__</span></div>
+    <table>
+      <thead><tr><th style="width:130px">项目</th><th>内容</th></tr></thead>
+      <tbody>
+        <tr><td>形态 / 估值范式</td><td><span class="badge b-rich"><形态></span>　<span class="badge b-buy"><估值范式></span>　补充标签 <span class="badge b-fair"><标签></span></td></tr>
+        <tr><td>判定依据</td><td><至少 2 条量化证据：营收/利润 3 年 CAGR、净利峰谷比、毛利率序列、股息率、ROE 序列></td></tr>
+        <tr><td><b>反方证据</b></td><td style="color:#b45309"><一条支持相反分类的证据；写不出说明判定太随意></td></tr>
+        <tr><td>起手因子（该形态）</td><td>① <…><br>② <…><br>③ <…></td></tr>
+        <tr><td>逻辑破坏信号</td><td><该形态专属的失效信号></td></tr>
+      </tbody>
+    </table>
+    <div class="note">分类只用来<b>起手找因子</b>，不进入计算。若因子指向另一类（如长协锁价使波动消失），以因子为准并申请改判。</div>
+  </section>
+
+  <section class="card">
+    <div class="sec-head"><span class="kicker">3</span><h2>持仓与资金</h2><span class="hint">数据源：行情快照 · portfolio.json</span></div>
+    <table>
+      <thead><tr><th>项目</th><th class="r">数值</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td>可用于该标的总资金</td><td class="r num em">__BUDGET__</td><td>含已投入部分，为上限</td></tr>
+        <tr><td>持股数 / 持仓成本</td><td class="r num">__SHARES__ / __COST__</td><td>只记最新成本，不记流水</td></tr>
+        <tr><td>持仓市值</td><td class="r num">__MV__</td><td>__SHARES__ × __PRICE__</td></tr>
+        <tr><td>浮动盈亏</td><td class="r num dn">__PNL__（__PNL_PCT__）</td><td>不计手续费</td></tr>
+        <tr><td>可用资金 / 可买股数</td><td class="r num">__CASH__ / __BUYABLE__ 股</td><td>每手 __LOT__ 股，一手 __LOT_VALUE__ 元</td></tr>
+        <tr><td>价格位置</td><td class="r"><span class="badge b-fair">合理区</span></td><td>脚本 calc 判定</td></tr>
+      </tbody>
+    </table>
+    <div class="note">已投入仅 __INVESTED__%，四个通道都有可用额度。高价股每手金额大（一手的价值 = __LOT_VALUE__ 元），分批时按每手取整，实际单笔会略超或略少于目标比例。</div>
+  </section>
+
+  <!-- ══════════ 二、企业质地 ══════════ -->
+  <section class="card">
+    <div class="sec-head"><span class="kicker">4</span><h2>企业质地</h2><span class="wt">权重 45%</span><span class="hint">上期 9/10 · 变动 0</span></div>
+    <div class="score">
+      <div class="big num">9<small>/10</small></div>
+      <div class="bar"><i style="width:90%"></i></div>
+      <div class="badge b-buy">优质</div>
+    </div>
+    <table>
+      <thead><tr><th>维度</th><th class="r">得分</th><th>依据（含报告期）</th></tr></thead>
+      <tbody>
+        <tr><td>盈利能力</td><td class="r num">2/2</td><td>ROE(TTM) 〔ROE〕，近 5 年持续 &gt; 〔阈值〕</td></tr>
+        <tr><td>盈利质量</td><td class="r num">2/2</td><td>净利率 〔净利率〕，经营现金流长期覆盖净利润</td></tr>
+        <tr><td>护城河</td><td class="r num">2/2</td><td>毛利率 〔毛利率〕（〔报告期〕），5 年波动 &lt; 3pct</td></tr>
+        <tr><td>财务稳健</td><td class="r num">1/2</td><td>无有息负债，但账面现金收益率偏低</td></tr>
+        <tr><td>治理与回报</td><td class="r num">2/2</td><td>股息率 〔股息率〕，分红连续且比例稳定</td></tr>
+      </tbody>
+      <tfoot><tr><td>合计</td><td class="r num">9/10</td><td>维持「优质」，本期未发现 A 类恶化信号</td></tr></tfoot>
+    </table>
+    <div class="note"><b>经营要点</b>：〔报告期〕营收 〔营收〕（同比 〔营收同比〕），归母净利 〔归母净利〕（同比 〔净利同比〕），毛利率 〔毛利率〕。此处写经营要点与变动归因，只陈述已披露事实。</div>
+  </section>
+
+  <!-- ══════════ 三、基础价值（不含任何"未来会更好"） ══════════ -->
+  <section class="card">
+    <div class="sec-head"><span class="kicker">5</span><h2>基础价值</h2><span class="wt">估值 30% 之 20%</span><span class="hint">锚定日 __ANCHOR_DATE__（〔报告期〕后复核）</span></div>
+    <table>
+      <thead><tr><th>基础价值（不含期权）</th><th class="r">价格</th><th class="r">现价相对位置</th><th>口径</th></tr></thead>
+      <tbody>
+        <tr><td>中枢下沿 base_low</td><td class="r num">__CORE__</td><td class="r num up">__POS_LOW__</td><td>PE 30 分位 × 正常化 EPS</td></tr>
+        <tr><td>中枢 base_mid</td><td class="r num">__BASE_MID__</td><td class="r num dn">__POS_MID__</td><td>PE 50 分位，期权上限的基准</td></tr>
+        <tr><td>中枢上沿 base_high</td><td class="r num">__BASE_HIGH__</td><td class="r num dn">__POS_HIGH__</td><td>PE 70 分位</td></tr>
+      </tbody>
+    </table>
+    <table style="margin-top:14px">
+      <thead><tr><th>估值指标</th><th class="r">数值</th><th>口径 / 说明</th></tr></thead>
+      <tbody>
+        <tr><td>PE（TTM / 静态）</td><td class="r num">__PE_TTM__ / __PE_LYR__</td><td>稳定消费型，主用 PE 分位</td></tr>
+        <tr><td>PB</td><td class="r num">__PB__</td><td>高 ROE 支撑，参考意义有限</td></tr>
+        <tr><td>股息率（TTM）</td><td class="r num">〔股息率〕</td><td>红利属性提供下限支撑</td></tr>
+        <tr><td>CAPE（跨周期校验）</td><td class="r num">约 __CAPE__</td><td>10 年平均净利润口径，分位 __CAPE_PCT__%</td></tr>
+      </tbody>
+    </table>
+    <div class="note">推导：合理 PE 区间 〔倍数区间〕 × 正常化 EPS 〔EPS〕 → 〔推导区间〕，取整为 base_low / base_high，中枢 base_mid。这一段<b>只反映现有盈利能力</b>，不包含任何注入、扩产、份额跃升。</div>
+  </section>
+
+  <!-- ══════════ 四、上行期权（只算下行会系统性低估） ══════════ -->
+  <section class="card">
+    <div class="sec-head"><span class="kicker">6</span><h2>上行期权</h2><span class="wt">估值 30% 之 10%</span><span class="hint">逐条定价，不接受"想象空间"</span></div>
+
+    <div class="opt">
+      <div class="opt-item">
+        <div class="oh"><span class="on">〔期权一：名称〕</span><span class="oc">__OPT1__</span></div>
+        <div class="om">触发：<i>〔可验证触发条件〕</i>　窗口：<i>〔窗口一〕</i>　兑现后每股增益 <i>__PAYOFF1__</i>　概率 <i>__PROB1__</i>　折价 <i>__DISC1__</i></div>
+      </div>
+      <div class="opt-item">
+        <div class="oh"><span class="on">〔期权二：名称〕</span><span class="oc">__OPT2__</span></div>
+        <div class="om">触发：<i>〔可验证触发条件〕</i>　窗口：<i>〔窗口二〕</i>　兑现后每股增益 <i>__PAYOFF2__</i>　概率 <i>__PROB2__</i>　折价 <i>__DISC2__</i></div>
+      </div>
+      <div class="opt-item" style="border-left-color:#d8dde6;background:#fafbfc">
+        <div class="oh"><span class="on" style="color:#64748b">〔观察项〕〔政策类期权〕</span><span class="oc" style="color:#94a3b8">__OPT3__</span></div>
+        <div class="om">未进估值：<i>尚无官方文件、无时间表</i>，按规则只作待验证风险，不给任何溢价。</div>
+      </div>
+    </div>
+
+    <div class="opt-sum">
+      <span><span class="k">每股期权价值</span>　<span class="v" style="color:#1a56db">__OPTION_VALUE__</span></span>
+      <span><span class="k">占基础中枢</span>　<span class="v">__OPT_PCT__%</span></span>
+      <span><span class="k">30% 上限</span>　<span class="v" style="color:#0f8a5f">未触发</span></span>
+    </div>
+
+    <div class="note">期权价值按 <b>Σ(增益 × 概率 × 折价)</b> 计算，超过基础中枢 30% 的部分只按 50% 计入，防止用故事替代业绩。<b>买入时按 ×0.6 打折计入合理上沿，卖出时按 ×1.0 全额计入透支线</b>——买要付真金白银，卖只是放弃一个可能。</div>
+  </section>
+
+  <!-- ══════════ 五、四个锚定价 + 五档刻度条 ══════════ -->
+  <section class="card">
+    <div class="sec-head"><span class="kicker">7</span><h2>四个锚定价</h2><span class="hint">买入侧期权打折，卖出侧全额</span></div>
+
+    <!--
+      刻度条算法：left% = (价位 − axisMin) / (axisMax − axisMin) × 100
+                  width% = (区间上界 − 区间下界) / (axisMax − axisMin) × 100
+      五段必须与 calc 的 valuation_zone_by_price 一致：
+        深度低估 ≤ deep ｜ 低估 deep–core ｜ 合理 core–fair_high ｜ 偏贵 fair_high–透支 ｜ 透支 > 透支线
+      占位：axisMin / axisMax 由 deep 与透支线推导，跨度按上式计算
+        下列 width / left 仅为版式演示，五段 width 之和必须为 100%
+        现价游标 left 由 (现价 − axisMin) / 跨度 得出
+      五段 width 之和必须为 100%，否则会露白。
+    -->
+    <div class="zone">
+      <div class="zone-bar">
+        <div class="zone-track">
+          <span class="z z1" style="width:11.32%">深度低估</span>
+          <span class="z z2" style="width:15.49%">低估</span>
+          <span class="z z3" style="width:36.97%">合理区</span>
+          <span class="z z4" style="width:26.61%">偏贵</span>
+          <span class="z z5" style="width:9.61%">透支</span>
+        </div>
+        <i class="marker" style="left:31.48%"><b class="num">__PRICE__</b></i>
+      </div>
+      <div class="zone-axis">
+        <span class="num" style="left:11.32%">__DEEP__ 深度低估</span>
+        <span class="num" style="left:26.81%">__CORE__ 底仓线</span>
+        <span class="num" style="left:63.78%">__FAIR_HIGH__ 合理上沿</span>
+        <span class="num" style="left:90.40%">__OVERVALUED__ 透支线</span>
+      </div>
+    </div>
+
+    <table style="margin-top:18px">
+      <thead><tr><th>锚</th><th class="r">价格</th><th class="r">现价相对</th><th>推导</th></tr></thead>
+      <tbody>
+        <tr><td>深度低估线</td><td class="r num">__DEEP__</td><td class="r num up">__POS_DEEP__</td><td>底仓线 ×（1 − 12%），质地 9 分取 12% 折价</td></tr>
+        <tr><td>底仓线 / 合理下沿</td><td class="r num">__CORE__</td><td class="r num up">__POS_LOW__</td><td>= base_low，<b>不含期权</b></td></tr>
+        <tr><td>合理上沿（买入硬上限）</td><td class="r num">__FAIR_HIGH__</td><td class="r num dn">__POS_FAIR__</td><td>__BASE_HIGH__ + 期权 __OPTION_VALUE__ × 0.6</td></tr>
+        <tr><td>估值透支线（减仓线）</td><td class="r num">__OVERVALUED__</td><td class="r num dn">__POS_OVER__</td><td>(__BASE_HIGH__ + __OPTION_VALUE__) × 1.15</td></tr>
+      </tbody>
+    </table>
+    <div class="note warn">若合理上沿不含期权（直接用 __BASE_HIGH__），这家公司一旦涨到 __BASE_HIGH_PLUS__ 就会一直显示"偏贵"，结果是永远不买或在期权兑现前清仓——这是与"追高"对称的另一种错误。</div>
+  </section>
+
+  <!-- ══════════ 四、行业与政策 ══════════ -->
+  <section class="card">
+    <div class="sec-head"><span class="kicker">8</span><h2>行业与政策</h2><span class="wt">权重 15%</span></div>
+    <table>
+      <thead><tr><th>事项</th><th>时间</th><th>影响路径</th><th>方向</th></tr></thead>
+      <tbody>
+        <tr><td>〔行业事件与来源，须注明发布主体与日期〕</td><td class="num">__DATE__</td><td>〔对量 / 价 / 成本 / 折现率的影响路径〕</td><td><span class="badge b-fair">中性偏正</span></td></tr>
+        <tr><td>〔行业事件，须附来源与日期〕</td><td class="num">__DATE__</td><td>〔影响路径〕</td><td><span class="badge b-up">正面</span></td></tr>
+      </tbody>
+    </table>
+    <div class="note warn">未证实项：市场传闻的〔政策项〕尚无官方文件，仅作为待验证风险，未计入估值。</div>
+  </section>
+
+  <!-- ══════════ 五、资金与情绪 ══════════ -->
+  <section class="card">
+    <div class="sec-head"><span class="kicker">9</span><h2>资金与情绪</h2><span class="wt">权重 6%</span><span class="hint">仅影响执行节奏</span></div>
+    <table>
+      <thead><tr><th>指标</th><th class="r">数值</th><th>读法</th></tr></thead>
+      <tbody>
+        <tr><td>当日主力净买入</td><td class="r num up">__INFLOW__ 万</td><td>板块逆势走强，有承接</td></tr>
+        <tr><td>量比</td><td class="r num">__VOL_RATIO__</td><td>与近 5 日均量持平</td></tr>
+        <tr><td>换手率</td><td class="r num">__TURNOVER__%</td><td>极低换手，筹码稳定</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- ══════════ 六、技术面与量价 ══════════ -->
+  <section class="card">
+    <div class="sec-head"><span class="kicker">10</span><h2>技术面与量价</h2><span class="wt">权重 4%</span><span class="hint">不单独构成买卖结论</span></div>
+    <table>
+      <thead><tr><th>维度</th><th>状态</th><th>数值</th></tr></thead>
+      <tbody>
+        <tr><td>量价定性（五选一）</td><td><span class="badge b-fair">缩量止跌</span></td><td>量比 〔量比〕，未创 5 日新低，下影 〔下影比例〕</td></tr>
+        <tr><td>均线</td><td>价格位于 MA20 上方</td><td class="num">MA20 __MA20__ / MA60 __MA60__</td></tr>
+        <tr><td>MACD</td><td>零轴上方金叉延续</td><td class="num">DIF __DIF__ / DEA __DEA__</td></tr>
+        <tr><td>RSI(6)</td><td>中性偏强</td><td class="num">__RSI__</td></tr>
+        <tr><td>60 日区间位置</td><td>中位</td><td class="num">__RANGE_POS__%</td></tr>
+        <tr><td>关键位</td><td>支撑 / 压力</td><td class="num">__SUPPORT__ / __RESISTANCE__</td></tr>
+      </tbody>
+    </table>
+    <div class="note">量价只回答"何时动手"。当前缩量止跌属观察信号，既不构成加仓理由（价格仍在合理区），也不构成减仓理由（基本面未变）。</div>
+  </section>
+
+  <!-- ══════════ 九、结论与建仓路径 ══════════ -->
+  <section class="card">
+    <div class="sec-head"><span class="kicker">11</span><h2>结论与建仓路径</h2><span class="hint">决策矩阵：优质 × 合理区 × 已持仓 __INVESTED__%</span></div>
+    <table>
+      <thead><tr><th>建仓通道</th><th class="r">触发价</th><th class="r">单笔上限</th><th>当前可达</th><th>前置条件</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>A 低估区建底仓</td><td class="r num">≤ __CORE__</td><td class="r num">__AMOUNT_AB__（__SHARES_AB__ 股）</td>
+          <td><span class="badge b-fair">否</span></td><td>质地 9 ✓　无 A 类信号 ✓</td>
+        </tr>
+        <tr>
+          <td>B 深度低估加仓</td><td class="r num">≤ __DEEP__</td><td class="r num">__AMOUNT_AB__（__SHARES_AB__ 股）</td>
+          <td><span class="badge b-fair">否</span></td><td>同上，且锚定价未下修</td>
+        </tr>
+        <tr>
+          <td>C 时间换价格底仓</td><td class="r num">≤ __FAIR_HIGH__</td><td class="r num">__AMOUNT_C__（__SHARES_C__ 股）</td>
+          <td><span class="badge b-buy">是</span></td>
+          <td>踏空厌恶 high ✓　质地 9 ✓　期权 __OPTION_VALUE__ ✓</td>
+        </tr>
+      </tbody>
+    </table>
+    <div class="note">C 通道节奏：每 10 个交易日一轮，每轮 ≤ 可用资金 1/4，累计 ≤ 1/2（上限见 calc.matrix）。价格回到低估值区即停用 C，改走 A/B 阶梯。<b>只挂 __DEEP__ 一个买单不是纪律，是赌它一定会来。</b></div>
+
+    <table style="margin-top:14px">
+      <thead><tr><th>减仓情景</th><th>条件</th><th>动作</th><th class="r">股数 / 金额</th></tr></thead>
+      <tbody>
+        <tr><td>触及透支线</td><td class="num">≥ __OVERVALUED__ 且盈利预期未上修</td><td>减 1/3</td><td class="r num">__SHARES__ 股 / ≈__SELL_AMOUNT__</td></tr>
+        <tr><td>出现 A 类信号</td><td>ROE 连续 2 年下滑且 &lt; 10%</td><td>复核后减仓 / 清仓</td><td class="r">待定</td></tr>
+      </tbody>
+    </table>
+    <div class="note warn">透支线已含期权全额（__BASE_HIGH__ + __OPTION_VALUE__ 再 ×1.15）。若用基础上沿 __BASE_HIGH__ 去卖，会在期权刚兑现时就清仓，那是另一种踏空。</div>
+  </section>
+
+  <!-- ══════════ 十、硬约束核对（尾盘决策专用，深度报表可删） ══════════ -->
+  <section class="card">
+    <div class="sec-head"><span class="kicker">12</span><h2>硬约束核对</h2><span class="hint">check-order · all_pass = false → 该笔不可执行</span></div>
+    <table>
+      <thead><tr><th>#</th><th>约束</th><th>结果</th><th>明细</th></tr></thead>
+      <tbody>
+        <tr><td class="num">1</td><td>股数为每手整数倍</td><td><span class="pass">PASS</span></td><td class="num">__SHARES__ 股，每手 __LOT__</td></tr>
+        <tr><td class="num">2</td><td>限价在涨跌停范围内</td><td><span class="pass">PASS</span></td><td class="num">允许 [__LIMIT_LOW__, __LIMIT_HIGH__]</td></tr>
+        <tr><td class="num">3</td><td>上行期权已评估</td><td><span class="pass">PASS</span></td><td class="num">已登记 2 条，每股 __OPTION_VALUE__</td></tr>
+        <tr><td class="num">4</td><td>限价 ≤ 合理上沿（含期权 ×0.6）</td><td><span class="pass">PASS</span></td><td class="num">__PRICE__ ≤ __FAIR_HIGH__</td></tr>
+        <tr><td class="num">5</td><td>价格落在可执行建仓通道</td><td><span class="pass">PASS</span></td><td>时间换价格底仓</td></tr>
+        <tr class="rowfail"><td class="num">6</td><td>合理区内买入须走「时间换价格」且门槛满足</td><td><span class="fail">FAIL</span></td><td>time_entry=False</td></tr>
+        <tr><td class="num">7</td><td>单笔 ≤ 通道上限（1/4 = __AMOUNT_C__）</td><td><span class="pass">PASS</span></td><td class="num">__LOT_VALUE__ ≤ __AMOUNT_C__</td></tr>
+        <tr><td class="num">8</td><td>数据为当日最新</td><td><span class="pass">PASS</span></td><td class="num">quote.time = __DATE__</td></tr>
+      </tbody>
+    </table>
+    <div class="note danger">第 6 条不通过 → 该笔不可执行。补上 <b>--time-entry</b> 并确认属于 C 通道轮次后才能下单；否则应挂在 A/B 通道的触发价上等待。</div>
+  </section>
+
+  <!-- ══════════ 十一、失效条件 ══════════ -->
+  <section class="card">
+    <div class="sec-head"><span class="kicker">13</span><h2>本结论可能被推翻的条件</h2></div>
+    <table>
+      <tbody>
+        <tr><td class="num" style="width:26px">1</td><td>〔报告期〕报告显示毛利率跌破 〔阈值〕、或经营现金流/净利润 &lt; 〔阈值〕 → 质地降级，重估锚定价</td></tr>
+        <tr><td class="num">2</td><td>〔核心因子读数〕持续 〔窗口〕 低于 〔阈值〕 → 渠道利润被压缩，护城河信号转弱</td></tr>
+        <tr><td class="num">3</td><td>价格上冲 ≥ __OVERVALUED__ 且一致预期未上修 → 触发估值透支减仓（该线已含期权全额）</td></tr>
+      </tbody>
+    </table>
+    <div class="note">下次必查：__EVENT_DATE__ 〔定期报告〕披露后 3 个交易日内，复核基础价值、期权清单（新增/兑现/证伪）与四个锚定价。</div>
+  </section>
+
+  <!-- ══════════ 尾盘纪律（仅尾盘决策输出，其他可删） ══════════ -->
+  <div class="discipline">
+    <span class="q">“</span>尾盘是新信息最少的时段，绝大多数日子正确答案是什么都不做。
+    <span class="from">— 尾盘纪律 · 每个交易日 14:30 / 15:30</span>
+  </div>
+
+  <footer>
+    <b>数据来源</b>　__DATA_SOURCE__（按实际使用的行情/财务数据源填写，并注明取数时点）　|　
+    <b>生成时间</b>　__TIME__　|　<b>持仓数据</b>　portfolio.json（更新于 __HOLDING_TIME__）<br>
+    本报告为个人投资决策辅助记录，不构成投资建议。所有价格与财务数据均以工具返回的实际值与其时点为准。
+  </footer>
+
+</div>
+</body>
+</html>
