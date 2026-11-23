@@ -330,7 +330,8 @@ def load():
     for k, v in DEFAULT_PREFS.items():
         prefs.setdefault(k, v)
     data["prefs"] = prefs
-    for h in (data.get("holdings") or {}).values():
+    for code, h in (data.get("holdings") or {}).items():
+        h.setdefault("currency", holding_currency(code, h))
         normalize_valuation(h)
         normalize_type(h)
         normalize_drivers(h)
@@ -370,6 +371,33 @@ def cmd_path(a):
          "reports": str(REPORTS), "portfolio_exists": PORTFOLIO.exists()})
 
 
+def holding_currency(code, h):
+    market = h.get("market") or market_of(code)
+    if market == "HK" or market_of(code) == "HK":
+        return "HKD"
+    return h.get("currency") or {"A": "CNY", "US": "USD"}[market]
+
+
+def bucket_funds(h, budget):
+    core_shares, swing_shares = normalize_split(h)
+    cost = float(h.get("cost") or 0)
+    total_cost = (core_shares + swing_shares) * cost
+    total_available = max(0, budget - total_cost)
+    ratio = (h.get("profile") or {}).get("base_budget_ratio")
+    if ratio is None:
+        shared = {"budget": budget, "invested": total_cost, "available": total_available}
+        return {"base": shared, "swing": shared}
+
+    base_budget = round(budget * ratio, 2)
+    result = {}
+    for key, cap, shares in (("base", base_budget, core_shares),
+                             ("swing", budget - base_budget, swing_shares)):
+        invested = shares * cost
+        result[key] = {"budget": cap, "invested": invested,
+                       "available": max(0, min(total_available, cap - invested))}
+    return result
+
+
 def cmd_show(a):
     data = load()
     ra, rg = regime_of(data)
@@ -389,13 +417,13 @@ def cmd_show(a):
     if not data["holdings"]:
         print("（持仓为空）")
         return
-    print("| 代码 | 名称 | 市场 | 总资金 | 持股数 | 持仓成本 | 成本金额 | 已投入比例 | 可用资金 | 更新时间 |")
-    print("|---|---|---|---|---|---|---|---|---|---|")
+    print("| 代码 | 名称 | 市场 | 币种 | 总资金 | 持股数 | 持仓成本 | 成本金额 | 已投入比例 | 可用资金 | 更新时间 |")
+    print("|---|---|---|---|---|---|---|---|---|---|---|")
     for code, h in data["holdings"].items():
         basis = h.get("shares", 0) * h.get("cost", 0)
         budget = h.get("budget", 0) or 0
         ratio = f"{basis / budget:.1%}" if budget else "-"
-        print(f"| {code} | {h.get('name','')} | {h.get('market','')} | {budget:,.2f} | {h.get('shares',0)} | "
+        print(f"| {code} | {h.get('name','')} | {h.get('market','')} | {holding_currency(code, h)} | {budget:,.2f} | {h.get('shares',0)} | "
               f"{h.get('cost',0):.4f} | {basis:,.2f} | {ratio} | {budget - basis:,.2f} | {h.get('updated_at','')} |")
 
 
@@ -425,7 +453,13 @@ def cmd_upsert(a):
         h["lot_size"] = int(a.lot_size)
     elif "lot_size" not in h and default_lot(mkt):
         h["lot_size"] = default_lot(mkt)
-    if a.currency is not None:
+    if mkt == "HK" or market_of(code) == "HK":
+        if a.currency is not None and a.currency.upper() != "HKD":
+            die("港股持仓的报价、成本和预算统一使用 HKD，请传入港元金额")
+        if a.currency is None and h.get("currency", "HKD") != "HKD":
+            die("旧档币种需核对成本和预算后，显式使用 --currency HKD 修正")
+        h["currency"] = "HKD"
+    elif a.currency is not None:
         h["currency"] = a.currency
     elif "currency" not in h:
         h["currency"] = {"A": "CNY", "HK": "HKD", "US": "USD"}[mkt]
@@ -904,6 +938,7 @@ def resolve_profile(data, h):
             "drawdown_tolerance": tol,
             "entry_style": style, "entry_style_label": STYLE_ENUM[style],
             "entry_zone_ratio": ratio,
+            "base_budget_ratio": p.get("base_budget_ratio"),
             "core_shares": core, "swing_shares": swing,
             "source": {"entry_style": "holding" if p.get("entry_style") else "global",
                        "entry_zone_ratio": src_ratio},
@@ -926,6 +961,10 @@ def cmd_set_profile(a):
         if not (0 <= a.entry_zone_ratio <= 1):
             die("entry_zone_ratio 应在 0–1 之间")
         p["entry_zone_ratio"] = a.entry_zone_ratio
+    if a.base_budget_ratio is not None:
+        if not 0 <= a.base_budget_ratio <= 1:
+            die("base_budget_ratio 应在 0–1 之间")
+        p["base_budget_ratio"] = a.base_budget_ratio
     total = int(h.get("shares", 0))
     if a.core_shares is not None:
         if not (0 <= a.core_shares <= total):
@@ -1005,6 +1044,14 @@ def cmd_plan_swing(a):
     basis = held * cost
     avail = max(0.0, budget - basis)
     max_shares = lots_floor(avail, price, lot)
+    if (h.get("profile") or {}).get("base_budget_ratio") is not None:
+        funds = bucket_funds(h, budget)
+        out({"ok": True, "code": code, "price": price, "lot": lot,
+             "currency": holding_currency(code, h), "budget_split": funds,
+             "core_shares": normalize_split(h)[0], "swing_shares": normalize_split(h)[1],
+             "max_buy_shares": lots_floor(funds["swing"]["available"], price, lot),
+             "advice": "现有股数分桶沿用台账。可买股数为波段余额的资金上限，执行前校验价格和订单。"})
+        return
     sug, sug_reasons = suggest_swing_ratio(data, h)
     if a.ratio is None:
         ratio = sug
@@ -1031,7 +1078,7 @@ def cmd_plan_swing(a):
                                             core_shares, swing_shares))
 
     out({"ok": True, "code": code, "price": price, "lot": lot,
-         "budget": budget, "held_shares": held, "available_cash": round(avail, 2),
+         "currency": holding_currency(code, h), "budget": budget, "held_shares": held, "available_cash": round(avail, 2),
          "max_buy_shares": max_shares,
          "ratio": ratio,
          "planned_total_shares": planned_total,
@@ -1495,7 +1542,9 @@ def matrix_advice(zone, budget, invested, avail):
                 "cap_amount": None, "room_amount": None,
                 "action": "未设置估值锚：禁止给出买入建议"}
     cap_amt = round(b * cap_pct, 2)
-    room = round(max(0.0, cap_amt - inv), 2)
+    room = round(max(0.0, min(avail, cap_amt - inv)), 2)
+    if zone in ("深度低估区", "低估区", "合理区") and room == 0 and avail <= 0:
+        action = "无底仓可用额度"
     return {"scope": "base",
             "zone": zone, "inv_pct": round(inv_pct, 2), "cap_pct": round(cap_pct, 4),
             "cap_amount": cap_amt, "room_amount": room,
@@ -1519,7 +1568,7 @@ def swing_advice(h, price, avail, lot, fair_high, quality_score):
       ① 仓位只划一次：只指定**底仓股数**，波段仓 = 总持仓 − 底仓，自动派生。
          波段仓没有比例上限——比例既不是钱的口径，也不是风险的口径，
          它只是把波段塞回底仓刻度的尺子。
-      ② 钱只有两块：底仓占用的钱 + 波段交易的钱（= 该标的可用资金）。
+      ② 已设分桶预算时使用波段余额，并受标的总余额约束。旧档案沿用共享余额。
          波段买入只受后者约束，不参与 1/3、2/3 任何预算刻度。
 
     波段只认自己剩下的三条：
@@ -1553,8 +1602,10 @@ def swing_advice(h, price, avail, lot, fair_high, quality_score):
     else:
         if sellable > 0:
             tail = "波段仓 %d 股可先卖后买" % sellable
-        elif buy_first_ok_now:
+        elif buy_first_ok_now and can_open > 0:
             tail = "波段仓 0 股（持仓全划底仓）→ 只能先买后卖，现价可做"
+        elif buy_first_ok_now:
+            tail = "波段可用资金不足一手"
         else:
             tail = ("波段仓 0 股且先买后卖也做不了：现价 %.2f 高于允许的最高买价 %.2f"
                     "（fair_high %.2f ÷ 1.05），要先跌到 %.2f 才有 5%% 价差空间"
@@ -1591,13 +1642,13 @@ def swing_advice(h, price, avail, lot, fair_high, quality_score):
             },
         },
         "note": "波段额度与底仓额度是两套账。底仓『还能加多少』看 matrix.room_amount；"
-                "波段『能用多少钱』看这里 buy_power（= 可用资金），"
+                "波段『能用多少钱』看这里 buy_power（波段可用资金），"
                 "『能卖多少股』看 sellable_shares（= 持仓 − 底仓）。**不许拿 room_amount 回答波段问题。**",
     }
 
 
 
-def build_entry_plan(v, p, avail, lot, quality, prefs_regime, ra, zone_ratio=0.33, budget=None):
+def build_entry_plan(v, p, avail, lot, quality, prefs_regime, ra, zone_ratio=0.33, budget=None, invested=None):
     """
     建仓阶梯：解决「只算下行、不留上行」导致的系统性踏空。
     返回三档触发价、额度，以及在当前价下的可执行股数。
@@ -1611,7 +1662,7 @@ def build_entry_plan(v, p, avail, lot, quality, prefs_regime, ra, zone_ratio=0.3
     _cap = max(avail, 0.0)
 
     def tier(price, label):
-        """三档只规定触发价，不切分金额：单笔额度 = 该标的可用资金全额。"""
+        """三档只规定触发价，不切分金额：单笔额度 = 底仓可用资金全额。"""
         price = round(price, 4) if price else None
         sh = lots_floor(_cap, price, lot) if price else 0
         return {"label": label, "trigger_price": price,
@@ -1625,14 +1676,14 @@ def build_entry_plan(v, p, avail, lot, quality, prefs_regime, ra, zone_ratio=0.3
         "tier1_core": tier(entry, "一档：合理区下沿（core_entry，不含期权）"),
         "tier2_add": tier(deep, "二档：深度价值线（deep_value）"),
         "tier3_deep": tier(deep * 0.85 if deep else 0, "三档：深跌 15%（deep_value × 0.85）"),
-        "amount_rule": "max_amount = 该标的可用资金全额（单笔不设比例上限）；"
+        "amount_rule": "max_amount = 底仓可用资金全额（单笔不设比例上限）；"
                        "实际能下多少股还要与 matrix.room_amount（累计额度）取小；"
                        "suggested_amount = 可用 ÷ 3，只是节奏建议，不是上限。",
     }
 
     # 时间换价格：价格长期不回落到核心区时的替代路径，避免"永远等不到"
     # 前置条件①（fundamental-standard 第 1 条）：空仓或底仓未建满（已投 ≤ 1/3 预算）
-    _inv = (float(budget) - float(avail)) if (budget not in (None, 0)) else 0.0
+    _inv = invested if invested is not None else (float(budget or 0) - float(avail))
     _inv_pct = (_inv / float(budget) * 100) if (budget not in (None, 0)) else 0.0
     base_built = bool(budget not in (None, 0) and _inv > float(budget) / 3 + 1e-6)
     zone_cap = round(entry + zone_ratio * (fh - entry), 4) if (entry and fh) else fh
@@ -1675,7 +1726,7 @@ def build_entry_plan(v, p, avail, lot, quality, prefs_regime, ra, zone_ratio=0.3
     plan["time_entry"] = te
     # 单笔资金上限：通道不设比例上限
     plan["single_order_cap"] = {
-        "rule": "A/B 单笔仅受该标的可用资金约束；C 单笔 ≤ 可用 1/2（与其累计上限自洽）",
+        "rule": "A/B 单笔仅受底仓可用资金约束；C 单笔 ≤ 可用 1/2（与其累计上限自洽）",
         "abl_pct": 1.0, "abl_amount": round(avail, 2),
         "abl_shares_at_entry": lots_floor(avail, entry, lot) if entry else 0,
         "c_pct": 0.5, "c_amount": round(avail * 0.5, 2),
@@ -1712,6 +1763,11 @@ def cmd_calc(a):
     basis = shares * cost
     mv = shares * p
     avail = budget - basis
+    funds = bucket_funds(h, budget)
+    base = funds["base"]
+    currency = holding_currency(code, h)
+    if h.get("currency") != currency:
+        die("持仓记录币种与市场口径不一致，请先核对金额并修正台账")
     ratio = (basis / budget * 100) if budget else 0.0
     if shares == 0:
         state = "空仓"
@@ -1725,7 +1781,7 @@ def cmd_calc(a):
         _fresh.append("现价 %.4f 与成本 %.4f 相差 %.0f%%，请确认价格没输错"
                       % (p, cost, abs(p / cost - 1) * 100))
     res = {
-        "code": code, "name": h.get("name"), "price": p, "price_time": a.price_time,
+        "code": code, "name": h.get("name"), "currency": currency, "price": p, "price_time": a.price_time,
         "shares": shares, "cost": cost, "lot_size": lot,
         "cost_basis": round(basis, 2), "market_value": round(mv, 2),
         "unrealized_pnl": round(mv - basis, 2),
@@ -1742,6 +1798,9 @@ def cmd_calc(a):
         "position_state_label": {"空仓": "未投入", "底仓": "已投 ≤1/3",
                                  "半仓": "已投 1/3–2/3", "重仓": "已投 ≥2/3"}.get(state, state),
     }
+    if (h.get("profile") or {}).get("base_budget_ratio") is not None:
+        res["budget_split"] = {key: {field: round(value, 2) for field, value in bucket.items()}
+                               for key, bucket in funds.items()}
     v = h.get("valuation") or {}
     for key in ("deep_value_price", "core_entry_price", "fair_high_price", "overvalued_above_price"):
         if v.get(key):
@@ -1828,7 +1887,7 @@ def cmd_calc(a):
             "shares": int(h["shares"]), "core_shares": _core_sh, "swing_shares": _swing_sh,
             "swing_pct": round(_swing_sh / int(h["shares"]) * 100, 1),
             "max_swing_per_trade": _swing_sh,
-            "swing_cash": round(max(avail, 0), 2),
+            "swing_cash": round(funds["swing"]["available"], 2),
             "core_cost_basis": round(_core_sh * cost, 2),
             "split_configured": bool(h.get("split_configured")),
             "note": (("底仓 %d 股不参与波段；波段仓 %d 股可双向操作，须预设另一端价格"
@@ -1854,10 +1913,10 @@ def cmd_calc(a):
     res["entry_style"] = {"key": _prof["entry_style"], "label": _prof["entry_style_label"],
                           "rules": _prof["rules"], "source": _prof["source"]["entry_style"]}
     res["trading_profile"] = _prof
-    res["budget_note"] = ("该标的可投入总额 %.2f，已投 %.2f（%.0f%%），还可投 %.2f。"
+    res["budget_note"] = ("该标的可投入总额 %.2f %s，已投 %.2f（%.0f%%），还可投 %.2f。"
                           "budget 是『这笔钱能全投进去』的额度，投满 100%% 是正常终局，"
                           "不代表账户满仓；它只用于控制单个标的的上限。"
-                          % (budget, basis, (basis / budget * 100) if budget else 0, max(avail, 0)))
+                          % (budget, currency, basis, (basis / budget * 100) if budget else 0, max(avail, 0)))
     if avail < 0:
         _fresh.append("可用资金为负（%.2f）：持仓成本已超过 budget，本轮任何买入都会被额度校验拦下；"
                       "请核对 budget 是否设错" % avail)
@@ -1899,14 +1958,14 @@ def cmd_calc(a):
     if _rk["triggered"] or _rk["event_due"]:
         res["reanchor_warning"] = _rk["verdict"]
     if v.get("deep_value_price"):
-        res["entry_plan"] = build_entry_plan(v, p, max(avail, 0), lot,
+        res["entry_plan"] = build_entry_plan(v, p, base["available"], lot,
                                              h.get("quality_score"), ra, ra,
-                                             _prof["entry_zone_ratio"], budget)
+                                             _prof["entry_zone_ratio"], base["budget"], base["invested"])
     # 决策矩阵脚本化：报告回答「还能加多少」只能引用 room_amount
     res["matrix"] = matrix_advice(res.get("valuation_zone_by_price") or zone_of(v, p),
-                                  budget, basis, max(avail, 0))
+                                  base["budget"], base["invested"], base["available"])
     # 波段额度独立成块：与底仓矩阵是两套账，互不套用
-    res["swing"] = swing_advice(h, p, max(avail, 0), lot,
+    res["swing"] = swing_advice(h, p, funds["swing"]["available"], lot,
                                 (v or {}).get("fair_high_price"), h.get("quality_score"))
     if not v:
         res["warning"] = "未设置估值锚：禁止给出任何买入建议，先跑 option + set-thesis。"
@@ -2071,8 +2130,7 @@ def cmd_check_order(a):
     prev_close = float(a.prev_close)
     lot = h.get("lot_size") or 1
     budget = h.get("budget", 0.0) or 0.0
-    basis = h.get("shares", 0) * h.get("cost", 0.0)
-    avail = budget - basis
+    funds = bucket_funds(h, budget)
     checks = []
     cap_info = {}
 
@@ -2084,6 +2142,8 @@ def cmd_check_order(a):
         out({"ok": True, "code": code, "side": side, "all_pass": True, "checks": checks})
         return
 
+    chk("持仓金额币种与市场口径一致", h.get("currency") == holding_currency(code, h),
+        f"台账 {h.get('currency')}，要求 {holding_currency(code, h)}")
     amount = shares * limit
     chk("股数为每手整数倍", shares > 0 and shares % lot == 0, f"{shares} 股，每手 {lot}")
     lim = price_limit_pct(code, h.get("name", ""))
@@ -2108,6 +2168,8 @@ def cmd_check_order(a):
                      "。先 option + set-thesis 重算四锚，再带 --anchor-reviewed 重下这笔单")
 
     if side == "buy":
+        bucket = funds["swing" if a.swing_open or a.swing_buyback else "base"]
+        avail = bucket["available"]
         ra, _rg = regime_of(data)
         fh = v.get("fair_high_price")
         entry = v.get("core_entry_price")
@@ -2143,19 +2205,12 @@ def cmd_check_order(a):
                 chk("波段卖出价不高于合理上沿（不指望卖进偏贵区）",
                     bool(fh) and float(_tsp) <= float(fh) + 1e-9,
                     ("卖出 %s，合理上沿 %s" % (_tsp, fh)) if fh else "未设 fair_high：禁止波段")
-            # 仓位只划底仓，波段仓 = 持仓 − 底仓（自动派生），不设比例上限：
-            # 比例既不是钱的口径也不是风险的口径，只是把波段塞回底仓刻度的尺子。
-            # 先买后卖的规模只由「钱」约束，即下面这条「买入金额不超过该标的可用资金」。
-            chk("买入金额不超过该标的可用资金", amount <= avail + 1e-6,
-                "拟用 %s，可用 %s" % (format(amount, ",.2f"), format(avail, ",.2f")))
-            # 波段就是高抛低吸，不存在 2/3 界，也不参与任何预算刻度判断。
-            # 「买后总投入 ≤ budget」与「金额 ≤ 可用资金」在 avail = budget − basis 下恒等，
-            # 属于冗余；而它输出的 amount_pct_of_budget_after 会把波段硬塞回底仓的预算百分比，
-            # 正是两套规则混淆的表现，故不输出。
+            chk("买入金额不超过对应分桶和标的总可用额度", amount <= avail + 1e-6,
+                f"拟用 {amount:,.2f}，可用 {avail:,.2f}")
             cap_info = {"swing_open": True, "target_sell_price": _tsp,
                         "swing_before": _swing_sh, "swing_after": _swing_sh + shares,
                         "core_shares_unchanged": _core_sh,
-                        "swing_note": "波段不设预算刻度、也不设股数比例上限：只看可用资金与 fair_high。"
+                        "swing_note": "波段使用分桶可用资金和 fair_high 校验。"
                                       "买入后波段仓自动 = 持仓 − 底仓，无需重新划仓。",
                         "concentration_note": "买入后持仓 %d 股、底仓 %d 股不变 → 波段仓 %d 股"
                                               % (int(h.get("shares", 0)) + shares, _core_sh,
@@ -2177,10 +2232,10 @@ def cmd_check_order(a):
                 chk("波段买回股数不超过上一轮卖出股数", shares <= int(_ss), f"拟买回 {shares}，上轮卖出 {_ss}")
                 chk("波段买回金额不超过上轮卖出回收金额", amount <= _back + 1e-6,
                     f"拟用 {amount:,.2f}，上轮回收 {_back:,.2f}")
-            chk("买入金额不超过该标的可用资金", amount <= avail + 1e-6, f"拟用 {amount:,.2f}，可用 {avail:,.2f}")
+            chk("买入金额不超过对应分桶和标的总可用额度", amount <= avail + 1e-6, f"拟用 {amount:,.2f}，可用 {avail:,.2f}")
         else:
             # 单笔操作不设通道比例上限：A/B 用可用全额、C 用 1/2（与累计上限对齐）
-            # A/B 单笔仅受该标的可用资金约束（1.0）；C 保留 1/2，以与其「累计 ≤ 可用 1/2」自洽
+            # A/B 单笔仅受底仓可用资金约束（1.0）；C 保留 1/2，以与其「累计 ≤ 可用 1/2」自洽
             if deep and limit <= float(deep):
                 channel, ratio_cap = "深度低估通道", 1.0
             elif entry and limit <= float(entry):
@@ -2207,8 +2262,8 @@ def cmd_check_order(a):
 
             # ④ 合理区内买入必须走「时间换价格」，且有门槛
             if channel == "时间换价格底仓":
-                _inv_pct2 = (basis / budget * 100) if budget else 0.0
-                _base_built = bool(budget and basis > budget / 3 + 1e-6)
+                _inv_pct2 = (bucket["invested"] / bucket["budget"] * 100) if bucket["budget"] else 0.0
+                _base_built = bool(bucket["budget"] and bucket["invested"] > bucket["budget"] / 3 + 1e-6)
                 gate = (a.time_entry and ra == "high" and q is not None and float(q) >= 8
                         and bool(ov.get("capped_per_share")) and not _base_built)
                 chk("合理区内买入走「时间换价格」且满足门槛（空仓/底仓未建满、踏空厌恶=high、质地≥8、期权已定价）",
@@ -2218,7 +2273,7 @@ def cmd_check_order(a):
 
             # ⑤ 金额与分批
             chk("买入金额不超过该标的可用资金", amount <= avail + 1e-6, f"拟用 {amount:,.2f}，可用 {avail:,.2f}")
-            room = matrix_advice(zone_of(v, limit), budget, basis, max(avail, 0))["room_amount"]
+            room = matrix_advice(zone_of(v, limit), bucket["budget"], bucket["invested"], avail)["room_amount"]
             chk("买入金额不超过底仓矩阵额度", room is not None and amount <= room + 1e-6,
                 f"拟用 {amount:,.2f}，底仓额度 {room}")
             cap = avail * ratio_cap
@@ -2279,7 +2334,7 @@ def cmd_check_order(a):
     chk("行情数据为当日最新且已核对时间戳", a.data_fresh, "由分析结论传入 --data-fresh")
     all_pass = all(c["pass"] for c in checks)
     out({"ok": True, "code": code, "side": side, "shares": shares, "limit": limit,
-         "amount": round(amount, 2),
+         "amount": round(amount, 2), "currency": holding_currency(code, h),
          "regret_aversion": regime_of(data)[0],
          "all_pass": all_pass, "checks": checks, **cap_info})
 
@@ -2484,11 +2539,16 @@ def _render_index(rows):
         else:
             concl = '<div class="concl"><i>暂无分析记录</i></div>'
         if r["shares"]:
-            pos = ("底仓 %s · 波段 %s · 可用 %s"
+            pos = ("底仓 %s 股 · 波段 %s 股 · 波段可用 %s %s"
                    % (format(r["core_shares"], ","), format(r["swing_shares"], ","),
-                      format(int(r["swing_cash"]), ",") if r["swing_cash"] is not None else "—"))
+                      format(r["swing_cash"], ",.2f") if r["swing_cash"] is not None else "—", r["currency"]))
         else:
             pos = "空仓"
+        if r["budget_split"] is not None:
+            funds = r["budget_split"]
+            pos += (" · 底仓预算 %s / 波段预算 %s %s"
+                    % (format(funds["base"]["budget"], ",.2f"),
+                       format(funds["swing"]["budget"], ",.2f"), r["currency"]))
         cards.append("\n".join([
             '  <section class="card" data-type="%s" data-tags="%s">'
             % (r["type_key"], ",".join(r["tags"])),
@@ -2630,8 +2690,11 @@ def cmd_selfcheck(a):
     for code, h in holdings.items():
         v = h.get("valuation") or {}
         budget = float(h.get("budget") or 0)
-        basis = float(h.get("shares") or 0) * float(h.get("cost") or 0)
-        avail = budget - basis
+        funds = bucket_funds(h, budget)
+        base = funds["base"]
+        swing_available = funds["swing"]["available"]
+        basis = base["invested"]
+        avail = base["available"]
         try:
             dv, ce, fh, ov = [float(v.get(k)) for k in ("deep_value_price", "core_entry_price",
                                                         "fair_high_price", "overvalued_above_price")]
@@ -2676,38 +2739,39 @@ def cmd_selfcheck(a):
         ck(code, "期权超过软阈值的部分按半价计入",
            abs(option["capped_per_share"] - expected) <= 0.00015, str(option["pct_of_base_mid"]))
         if v.get("deep_value_price") and budget > 0:
-            base_built = basis > budget / 3 + 1e-6
+            base_budget = base["budget"]
+            base_built = basis > base_budget / 3 + 1e-6
             px = last_px.get(code)
             if px:
                 ep = build_entry_plan(v, px, max(avail, 0), h.get("lot_size") or 1,
                                       h.get("quality_score"), _ra, _ra,
-                                      resolve_profile(data, h)["entry_zone_ratio"], budget)
+                                      resolve_profile(data, h)["entry_zone_ratio"], base_budget, basis)
                 te = ep["time_entry"]
                 ck(code, "底仓已建满时 C 通道必须关闭",
                    (not base_built) or (not te.get("allowed")),
                    "allowed=%s base_built=%s 已投=%.2f%%" % (te.get("allowed"), base_built,
-                                                            basis / budget * 100 if budget else 0))
-                m = matrix_advice(zone_of(v, px), budget, basis, max(avail, 0))
+                                                            basis / base_budget * 100 if base_budget else 0))
+                m = matrix_advice(zone_of(v, px), base_budget, basis, avail)
                 ck(code, "matrix 额度与动作不矛盾",
                    not (m.get("room_amount") == 0 and "加至" in (m.get("action") or "")),
                    "%s / room=%.2f" % (m.get("action"), m.get("room_amount") or 0))
                 # 波段与底仓是两套账，不得混用进场条件
                 lsz = int(h.get("lot_size") or 1)
-                sw = swing_advice(dict(h), px, max(avail, 0), lsz,
+                sw = swing_advice(dict(h), px, swing_available, lsz,
                                   v.get("fair_high_price"), h.get("quality_score"))
                 _core, _sw = normalize_split(dict(h))
                 _exp_sell = _sw
-                _exp_open = int(max(avail, 0) // (px * lsz)) * lsz if px > 0 else 0
+                _exp_open = int(swing_available // (px * lsz)) * lsz if px > 0 else 0
                 ck(code, "矩阵额度只作用于底仓（scope=base）",
                    m.get("scope") == "base",
                    "scope=%s" % m.get("scope"))
                 ck(code, "波段无建仓价位门槛（不受 deep/entry/zone_cap 约束）",
                    sw.get("entry_gate") is None and sw.get("scope") == "swing",
                    "entry_gate=%s" % sw.get("entry_gate"))
-                ck(code, "波段可用资金 = 该标的可用资金（不受矩阵 room 约束）",
-                   abs(float(sw.get("buy_power") or 0) - max(avail, 0)) < 0.01,
+                ck(code, "波段可用资金与分桶余额一致",
+                   abs(float(sw.get("buy_power") or 0) - swing_available) < 0.01,
                    "buy_power=%.2f avail=%.2f room=%.2f"
-                   % (float(sw.get("buy_power") or 0), max(avail, 0), float(m.get("room_amount") or 0)))
+                   % (float(sw.get("buy_power") or 0), swing_available, float(m.get("room_amount") or 0)))
                 ck(code, "波段仓 = 总持仓 − 底仓（自动派生，用户只划底仓）",
                    (sw.get("core_shares") == _core) and (sw.get("swing_shares") == _exp_sell)
                    and (_core + _sw == int(h.get("shares", 0) or 0)),
@@ -2719,7 +2783,7 @@ def cmd_selfcheck(a):
                 ck(code, "先买后卖的可买股数只由可用资金决定（无 35% 比例上限）",
                    sw.get("can_open_shares") == _exp_open,
                    "can_open=%s 期望=%s（可用 %.2f / 一手 %.2f）"
-                   % (sw.get("can_open_shares"), _exp_open, max(avail, 0), px * lsz))
+                   % (sw.get("can_open_shares"), _exp_open, swing_available, px * lsz))
                 _fh = v.get("fair_high_price")
                 _exp_bf = round(float(_fh) / 1.05, 4) if _fh else None
                 ck(code, "先买后卖的价格闸门 = fair_high ÷ 1.05",
@@ -2783,8 +2847,8 @@ def cmd_index(a):
             _rev_age = None
         prof = resolve_profile(data, h)
         core_sh, swing_sh = normalize_split(h)
-        basis = int(h.get("shares", 0)) * float(h.get("cost", 0) or 0)
         bg = float(h.get("budget", 0) or 0)
+        funds = bucket_funds(h, bg)
         lr = last.get(code) or {}
         pend = []
         for x in dv.get("stale") or []:
@@ -2799,7 +2863,9 @@ def cmd_index(a):
                      "style_src": prof["source"]["entry_style"],
                      "zone_ratio": prof["entry_zone_ratio"],
                      "core_shares": core_sh, "swing_shares": swing_sh,
-                     "swing_cash": round(max(bg - basis, 0), 2) if bg else None,
+                     "currency": holding_currency(code, h),
+                     "swing_cash": funds["swing"]["available"] if bg else None,
+                     "budget_split": funds if prof.get("base_budget_ratio") is not None else None,
                      "shares": int(h.get("shares", 0)),
                      "type_key": ct.get("primary") or "none",
                      "tags": ct.get("tags") or [], "quality": h.get("quality_score"),
@@ -2975,6 +3041,7 @@ def main():
     s.add_argument("--code", required=True)
     s.add_argument("--entry-style", choices=sorted(STYLE_ENUM), help="该标的的建仓风格")
     s.add_argument("--entry-zone-ratio", type=float, help="该标的的建仓窗口比例 0–1")
+    s.add_argument("--base-budget-ratio", type=float, help="底仓占该标的总预算的比例，波段使用余下比例")
     s.add_argument("--swing-shares", type=int, help="该标的的波段仓股数（浮动部分）")
     s.add_argument("--core-shares", type=int, help="该标的的底仓股数（固定不动，推荐用这个）")
     s.add_argument("--swing-quality-override", choices=["on", "off"], dest="swing_quality_override",
