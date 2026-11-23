@@ -2030,12 +2030,13 @@ def _pick(b, *keys):
     return None
 
 
-def load_bars(path):
+def load_bars(path, code=None):
     """
-    兼容三种输入：
+    兼容以下输入：
       1) 自定义：{"market":"A","elapsed_minutes":210,"bars":[{date,open,high,low,close,volume}]}
       2) 行情工具 data_kline 原样返回：{"data":{"nodes":[{date,open,high,low,last,volume}]}}
       3) {"nodes":[...]}
+      4) market_data.py session 的输出，使用 --code 选择标的
     统一输出按日期升序的 bars。
     """
     if not Path(path).exists():
@@ -2045,6 +2046,13 @@ def load_bars(path):
             d = json.load(f)
     except json.JSONDecodeError as e:
         die(f"K 线文件不是合法 JSON：{e}")
+    if isinstance(d, dict) and "symbols" in d:
+        symbol = normalize_code(code) if code else None
+        if symbol not in d["symbols"]:
+            die("market_data.py session 的输出须用 --code 指定其中的标的")
+        d = d["symbols"][symbol]["volprice"]
+        if not d:
+            die(f"{symbol} 未取到任务截点的量价输入，请检查 session 输出的 gaps")
     mkt_hint, elapsed_hint, raw = None, None, None
     if isinstance(d, dict) and isinstance(d.get("bars"), list):
         raw = d["bars"]
@@ -2081,11 +2089,11 @@ def load_bars(path):
 
 def cmd_volprice(a):
     """
-    输入见 load_bars 的三种格式。至少 21 根 K 线，推荐 61 根以上（用于判断是否处于高位）。
+    输入见 load_bars。至少 21 根 K 线，推荐 61 根以上（用于判断是否处于高位）。
     当日已交易分钟：A股 14:30=210、收盘=240；港股 15:30=300、收盘=330。
     可用 --elapsed 覆盖，或 --market 指定市场。
     """
-    bars, mkt_hint, elapsed_hint = load_bars(a.file)
+    bars, mkt_hint, elapsed_hint = load_bars(a.file, getattr(a, "code", None))
     if len(bars) < 21:
         die("K线不足 21 根，无法做量价定性")
     mkt = a.market or mkt_hint or "A"
@@ -3203,6 +3211,7 @@ def main():
     s.add_argument("--price-time", help="行情时间戳"); s.set_defaults(fn=cmd_calc)
 
     s = sp.add_parser("volprice"); s.add_argument("--file", required=True)
+    s.add_argument("--code", help="market_data.py session 输出中的标的代码")
     s.add_argument("--market", choices=["A", "HK", "US"], help="市场（决定全日交易分钟数）")
     s.add_argument("--elapsed", type=int, help="当日已交易分钟数（A股14:30=210，港股15:30=300）")
     s.set_defaults(fn=cmd_volprice)

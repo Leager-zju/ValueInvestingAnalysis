@@ -1,6 +1,6 @@
 # 平台适配指南
 
-本技能遵循 [Agent Skills 开放规范](https://agentskills.io/specification)，`SKILL.md` 与 `references/` 中的分析规则、估值框架、`scripts/portfolio.py` 在所有平台完全一致。不同的只有**宿主 Agent 提供的能力名称**与**技能目录位置**。
+本技能遵循 [Agent Skills 开放规范](https://agentskills.io/specification)。各平台共用 `SKILL.md`、`references/`、`scripts/market_data.py` 和 `scripts/portfolio.py`。按技能目录解析脚本路径，按宿主能力映射补证工具。
 
 > 规范只定义「技能文件夹里装什么」，不定义「文件夹放哪里」。各客户端自行决定安装路径，因此同一份 skill 在不同工具里要放到不同目录。
 

@@ -21,7 +21,7 @@ metadata:
 |---|---|---|
 | `AskUserQuestion` | 向用户提出带选项的交互提问 | 用普通对话逐题询问，等用户回答后再继续 |
 | `present_files` | 把本地 HTML 报告作为卡片/预览推给用户 | 输出报告绝对路径，让用户自行打开 |
-| `data_*`（`data_quote` / `data_finance` / `data_kline` …） | 结构化行情、财务、K 线、新闻、公告数据 | 按 `references/data-sources.md` 的降级链走检索 |
+| `data_*`（`data_quote` / `data_finance` / `data_kline` …） | 补齐共用脚本缺失的结构化字段，以及一致预期、新闻、公告等接口 | 按 `references/data-sources.md` 的降级链走检索 |
 | `domain_search` / `WebSearch` | 网页或结构化检索，且能给出来源与日期 | 用平台自带的搜索工具，同样必须标注来源与时点 |
 | `westockdata` / `ifind-finance-data` | 备选金融数据技能 | 直接跳过，继续降级 |
 | 定时任务 / 自动化 | 工作日定时触发工作流 B / C | 手动触发对应工作流即可，分析标准不变 |
@@ -29,6 +29,13 @@ metadata:
 各平台的安装路径、能力映射与数据目录配置见 **`references/platform-adapters.md`**。
 
 **数据目录**默认 `~/.value-investing/`，与技能目录分离（升级或重装技能不会丢数据），可用环境变量 `VI_DATA_DIR` 指向别处。已存在旧目录 `~/.workbuddy/value-investing/` 的用户会被自动兼容，无需迁移。
+
+## 共用取数入口
+
+回测和定时任务共用 [`scripts/market_data.py`](scripts/market_data.py)。以**本次读取的 `SKILL.md` 所在目录**为技能根目录，脚本路径为 `<技能根目录>/scripts/market_data.py`。在 StockAnalysis 本机任务中，绝对路径为 **`F:/ValueInvestingAnalysis/scripts/market_data.py`**。
+
+- A/H 股任务行情先跑 `session`。报价、上一交易日收盘和尾盘量价数据按同一入口取得。历史日线、财务摘要和港币汇率分别使用 `daily`、`finance` 和 `fx`。回测直接导入同一脚本的取数函数，复用财报可用日期过滤和汇率对齐。
+- 脚本返回 `gaps` 或 `ok=false` 时，按 [数据获取与时效校验](references/data-sources.md) 为缺失字段逐项补证，并在报告与日志记录实际使用的来源和时点。竞价匹配量、可成交盘口、同点 IOPV、正式公告原文和按标的定义的经营驱动纳入补证范围。
 
 ## 定位
 
@@ -55,7 +62,7 @@ metadata:
    - 通过 → 进入下一步；
    - **未检测到 → 用 `AskUserQuestion` 询问是否安装**（选项：安装 / 我自己装 / 暂时跳过）。同意后按系统执行安装（Windows `winget install -e --id Python.Python.3.12`，macOS `brew install python@3.12`，Linux `apt-get install -y python3`），并说明这会修改系统环境、需要管理员权限；
    - **禁止**静默失败、用其他语言重写脚本绕过、或把"没装 Python"说成"取不到数据"。
-2. **确认数据源可用**：优先使用宿主 Agent 已连接的**结构化行情数据源**（如 `data_quote` / `data_finance` / `data_kline` / `data_news` 一类工具，具体名称依平台而定）。没有该能力时，按 `references/data-sources.md` 的降级链改用平台的检索工具，并标注来源与日期；**不要因为取不到数据就编造**。能力映射见 `references/platform-adapters.md`。
+2. **确认数据源可用**：先验证共用取数脚本。未覆盖的市场、字段及数据按 `references/data-sources.md` 的顺序补证，并标注来源与日期。能力映射见 `references/platform-adapters.md`。
 3. **全局画像（问答式，不要用户敲命令）**：用 `AskUserQuestion` 问 **4 道行为题**——追价意愿、后悔方向、资金期限、浮亏容忍，汇总成 `regret_aversion` 与 `drawdown_tolerance`，由**你**代跑 `set-prefs` 写入，并把原始答案记进 `--profile-note`。**建仓风格不在这里问**，它属于标的画像（见工作流 A 的 4.5）。
    - 冲突时取更保守的一档（理由见 onboarding.md）；
    - 若"资金 1 年内可能要用"，**不要继续建档**——本框架假设 3 年以上持有期；
@@ -191,6 +198,8 @@ python <skill>/scripts/portfolio.py path
 
 数据条件：9:15–9:25 集合竞价已结束，能拿到开盘参考价与竞价匹配量，**拿不到连续竞价数据**。
 
+交易日和持仓市场校验后，先对本轮全部标的运行 `scripts/market_data.py session --session morning`。使用当天 09:30 的指定分钟报价及上一交易日收盘；竞价匹配量从独立盘前逐笔或结构化竞价源核验。迟到补录时仍用原任务截点。
+
 **按价值偏离分流（`references/decision-rules.md` 第 5 节）**：使用 `calc.value_gap`、`matrix.room_amount` 与当前仓位。已有底仓时仍检查 A/B 的加仓机会，并单独给出高估减仓的触发条件。用户选择波段时按第 7 节检查可行路径。
 
 早盘与尾盘写 `log` 时附 `--quote-time` 和 `--quote-source`。实际启动时间有调度记录时另传 `--trigger-time`。日志写入时间由脚本生成，报价或启动时间缺证据时留空。迟到的早盘结果明确标记为补录。
@@ -219,7 +228,7 @@ python <skill>/scripts/portfolio.py path
 
 数据条件：当日已成交 210 分钟（A股，87.5%）/ 300 分钟（港股，91%），形态基本成型。
 
-取量价数据的方式：调用 `data_kline`（`period=day fq=qfq limit=120`）后，把返回的 `nodes` 原样写入一个临时 JSON 文件（保留 `date/open/high/low/last/volume` 即可，其余字段可删），再交给 `volprice`。脚本兼容工具原始返回格式并会自动按日期升序，不要手工重排或用记忆中的 K 线。
+交易日和持仓市场校验后，先运行 `scripts/market_data.py session --session afternoon`，保存 JSON。脚本按市场固定取 A 股 14:30 或港股 15:30。运行 `scripts/portfolio.py volprice --file <结果.json> --code <代码>` 直接读取同一份结果。当天 K 线截取到任务时点，分时采样高低点和复权降级要在报告标明；精确盘口、量能或日线缺失时按取数规范补证。
 
 必须包含且不可省略：
 

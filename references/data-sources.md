@@ -2,12 +2,36 @@
 
 ## 0. 总原则
 
-1. **优先走已连接的结构化数据源**（下表的 `data_*` 是能力占位符，指你所用平台提供的行情/财务数据工具；平台不同名字可能不同，见 `platform-adapters.md`）。命中能力域时不要用网页搜索或记忆替代。
+1. **A/H 股使用共用入口** [`scripts/market_data.py`](../scripts/market_data.py) 取任务行情、日线、可用财务摘要和人民币兑港币汇率。超出脚本覆盖范围或个别字段缺失时，优先补平台已连接的结构化数据源（下表的 `data_*` 为能力占位符，见 `platform-adapters.md`）。
 2. 每个数字都要能回答三个问题：**来源**、**时点**、**口径**（TTM / 累计 / 单季 / 静态）。
 3. 取不到就写"未取到"，并说明对结论的影响。**禁止用近似值、记忆值或推算值冒充实测值。**
 4. 多个无依赖的查询应在同一轮并行发出，不要串行等待。
 
-## 1. 工具映射表
+## 1. 共用取数脚本
+
+从正在使用的 `SKILL.md` 所在目录解析 `scripts/market_data.py`。StockAnalysis 当前安装路径为 `F:/ValueInvestingAnalysis/scripts/market_data.py`。先按市场日历核对交易日、开市时段和持仓市场，再调用脚本。
+
+```bash
+python F:/ValueInvestingAnalysis/scripts/market_data.py session \
+  --session morning --date 2026-11-23 --codes sh600036 hk00700 --output _tmp/market-morning.json
+python F:/ValueInvestingAnalysis/scripts/market_data.py session \
+  --session afternoon --date 2026-11-23 --codes sh600036 --output _tmp/market-close-a.json
+python F:/ValueInvestingAnalysis/scripts/market_data.py session \
+  --session afternoon --date 2026-11-23 --codes hk00700 --output _tmp/market-close-hk.json
+VI_DATA_DIR=F:/StockAnalysis python F:/ValueInvestingAnalysis/scripts/portfolio.py path
+VI_DATA_DIR=F:/StockAnalysis python F:/ValueInvestingAnalysis/scripts/portfolio.py volprice \
+  --file _tmp/market-close-hk.json --code hk00700
+python F:/ValueInvestingAnalysis/scripts/market_data.py daily --code sh600036 --year 2026 --end 2026-11-23 --adjust hfq
+python F:/ValueInvestingAnalysis/scripts/market_data.py finance --code sh600036 --as-of 2026-11-23 --period all
+python F:/ValueInvestingAnalysis/scripts/market_data.py fx --date 2026-11-23
+```
+
+- `session` 使用腾讯财经对应市场的分时及日线。早盘 09:30，A 股尾盘 14:30，港股尾盘 15:30，均为北京时间。返回每只标的的 `quote`、尾盘 `volprice` 和缺口 `gaps`。只接受当天该分钟的记录，当前分钟尚未到或近期分时接口没有该截点时留空。迟到补录注明结果写入时点与报价时点。若部分标的缺关键报价，退出码为 2，仍可读取已保存的 JSON 中成功标的。
+- `quote` 的高低点来自截点前的分钟报价采样，`volume` 是截点累计量（A 股手、港股股）。`prev_close` 来自上一交易日原价日线。除权、停复牌日执行前须核对交易所价格参考。竞价匹配量、买卖盘口、同点 IOPV 用同一时点的独立数据补齐。
+- 尾盘量价输入使用截点前的数据和同口径历史日线。前复权历史与任务日原价能校验同一尺度时优先用前复权，否则返回统一原价并标记降级，量价初判注明限制。日线和分时口径、时间等校验不过时，缺项留空。
+- `finance` 的 A 股摘要来自东方财富。公告日和更新日都必须早于 `--as-of`；同日公告按正式披露的具体时刻另作核对。历史原始公告及港股发行人披露可用 `--filings <JSON>` 提供，按其中的披露日期和来源校验。港股未提供经核实的披露文件时，用发行人或交易所公告补证。财务输入以人民币计，汇率命令取指定日前最近的香港金管局日汇率。汇率缺失或早于指定日超过 8 天时返回缺口。
+
+## 1.1 补证工具映射表
 
 | 需要什么 | 工具 | 关键参数 | 关键返回字段 |
 |---|---|---|---|
@@ -29,7 +53,7 @@
 | 交易日校验 | `data_trade_calendar` | `market=hs\|hk` `date` | 是否交易日 |
 | 情绪热度 | `data_hot`（`stock`/`news`） | — | 热搜榜（辅助，不能单独构成结论） |
 
-**降级顺序**（前一级不可用才降到下一级，切换时必须说明换了源）：
+**补证顺序**（共用脚本缺字段、缺市场覆盖或取数失败时使用，切换时说明实际来源）：
 
 1. 平台已连接的**结构化行情数据源**（`data_*` 或等价工具，字段要求见第 1 节）
 2. **结构化检索能力**（`domain_search` 或平台等价工具）：用一句中文检索意图直接拿结构化表（如"查询某股最近 60 个交易日日K与最新财务"），返回的原始表可直接用；K 线需自行落成 `{"market","elapsed_minutes","nodes":[...]}` 或 `{"nodes":[...]}` 再喂给 `volprice`
