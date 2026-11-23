@@ -45,7 +45,7 @@ import math
 import os
 import re
 import sys
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
 from pathlib import Path
 
 try:
@@ -1606,7 +1606,7 @@ def swing_advice(h, price, avail, lot, fair_high, quality_score):
       ③ 必须有**两端价格**：先卖后写给买回价，先买后卖给卖出价，价差 ≥5%、卖端 ≤ fair_high。
     """
     core, swing = normalize_split(h)
-    q = quality_score
+    q = float(quality_score) if quality_score is not None else None
     lsz = int(lot or 100)
     p = float(price or 0)
     av = max(0.0, float(avail or 0))
@@ -2182,8 +2182,18 @@ def cmd_check_order(a):
     chk("持仓金额币种与市场口径一致", h.get("currency") == holding_currency(code, h),
         f"台账 {h.get('currency')}，要求 {holding_currency(code, h)}")
     amount = shares * limit
+    valid_swing = (not (a.swing_open or a.swing_buyback) or
+                   (side == "buy" and not (a.swing_open and a.swing_buyback)))
+    valid_swing = valid_swing and (not a.swing_exit or (side == "sell" and a.sell_reason == "swing"))
+    chk("单笔订单只能选择适用的一条波段路径", valid_swing,
+        f"side={side}, open={a.swing_open}, buyback={a.swing_buyback}, exit={a.swing_exit}")
     chk("股数为每手整数倍", shares > 0 and shares % lot == 0, f"{shares} 股，每手 {lot}")
+    valid_prices = math.isfinite(limit) and math.isfinite(prev_close) and limit > 0 and prev_close > 0
+    chk("限价与昨收均为有限正数", valid_prices, f"限价 {limit}，昨收 {prev_close}")
     lim = price_limit_pct(code, h.get("name", ""))
+    if not valid_prices:
+        out({"ok": True, "code": code, "side": side, "all_pass": False, "checks": checks})
+        return
     if lim is not None:
         up, dn = round(prev_close * (1 + lim), 2), round(prev_close * (1 - lim), 2)
         chk("限价在涨跌停范围内", dn <= limit <= up, f"限价 {limit}，允许 [{dn}, {up}]（±{lim:.0%}）")
@@ -2231,6 +2241,9 @@ def cmd_check_order(a):
         _zr = _prof["entry_zone_ratio"]
         zone_cap = (float(entry) + _zr * (float(fh) - float(entry))) if (entry and fh) else fh
         _core_sh, _swing_sh = normalize_split(h)
+        if a.swing_open or a.swing_buyback:
+            chk("波段需有底仓且质地达标或用户已明确覆盖",
+                swing_advice(h, limit, avail, lot, fh, q)["eligible"], f"底仓 {_core_sh} 股，质地 {q}")
         if a.swing_open:
             # 波段建仓（先买后卖）。decision-rules 7.4：波段仓的买入**不受建仓通道与矩阵 room 限制**，
             # 因为它不是长期敞口，用「必须在低估区买」去管它，等于把波段变成第二份底仓。
@@ -2259,7 +2272,7 @@ def cmd_check_order(a):
             _sp = a.swing_sell_price
             _ss = a.swing_sold_shares
             _floor = round(float(_sp) * 0.95, 4) if _sp else None
-            chk("已提供上一轮波段卖出价（用于校验价差）", bool(_sp),
+            chk("已提供上一轮波段卖出价（用于校验价差）", _sp is not None and math.isfinite(_sp) and _sp > 0,
                 (f"卖出价 {_sp}，买回上限 {_floor}") if _sp
                 else "缺少 --swing-sell-price：无法校验「买回 ≤ 卖价×0.95」")
             chk("波段买回价低于卖出价至少 5%", bool(_sp) and limit <= _floor + 1e-9,
@@ -2267,7 +2280,9 @@ def cmd_check_order(a):
             chk("波段买回不要求落回建仓窗口（fair_high 即上限，见 7.3 第 4 条）",
                 bool(fh) and limit <= float(fh) + 1e-9,
                 f"买回 {limit} ≤ 合理上沿 {fh}；窗口上限 {round(zone_cap, 2) if zone_cap is not None else '—'} 仅用于新建仓，不约束买回")
-            if _ss:
+            chk("已提供上一轮实际卖出的正股数", _ss is not None and _ss > 0,
+                f"上轮卖出 {_ss} 股，须提供 --swing-sold-shares")
+            if _ss is not None and _ss > 0:
                 _back = float(_sp) * int(_ss) if _sp else 0.0
                 chk("波段买回股数不超过上一轮卖出股数", shares <= int(_ss), f"拟买回 {shares}，上轮卖出 {_ss}")
                 chk("波段买回金额不超过上轮卖出回收金额", amount <= _back + 1e-6,
@@ -2348,14 +2363,27 @@ def cmd_check_order(a):
                     chk("卖出价高于买入价至少 5%（先买后卖的出口条件）", limit >= _f - 1e-9,
                         f"卖出 {limit} vs 买入 {a.swing_entry_price}×1.05={_f:.4f}")
             else:
+                q = h.get("quality_score")
+                fh = v.get("fair_high_price")
+                chk("开启波段需有底仓且质地达标或用户已明确覆盖",
+                    swing_advice(h, limit, 0, lot, fh, q)["eligible"], f"底仓 {core_sh} 股，质地 {q}")
+                chk("开启波段前复核无基本面恶化", a.fundamental_ok, "由分析结论传入 --fundamental-ok")
+                stalling = getattr(a, "swing_stalling", False)
+                chk("先卖后买须处于偏贵区或高位放量滞涨",
+                    bool(fh and limit > float(fh)) or stalling, f"合理上沿 {fh}，高位放量滞涨 {stalling}")
+                chk("先卖后买须复核盈利预期未上修", getattr(a, "swing_earnings_not_raised", False),
+                    "由分析结论传入 --swing-earnings-not-raised")
                 chk("波段卖出必须给出计划买回价（先卖后买），或改用 --swing-exit（先买后卖兑现）",
                     bool(a.buyback_price),
                     f"买回价 {a.buyback_price}" if a.buyback_price
                     else "缺失 --buyback-price：没有买回计划的波段就是减仓；"
                          "若这是早先 --swing-open 买入的仓位兑现，请改用 --swing-exit --swing-entry-price")
                 if a.buyback_price and limit:
-                    chk("买回价低于卖出价至少 5%", float(a.buyback_price) <= limit * 0.95 + 1e-9,
+                    chk("买回价低于卖出价至少 5%", 0 < float(a.buyback_price) <= limit * 0.95 + 1e-9,
                         f"买回 {a.buyback_price} vs 卖出 {limit}×0.95={limit * 0.95:.2f}")
+                    chk("计划买回价不高于卖出当日合理上沿",
+                        bool(fh) and float(a.buyback_price) <= float(fh) + 1e-9,
+                        f"买回 {a.buyback_price} vs 合理上沿 {fh}")
         else:
             chk("卖出理由为基本面恶化或估值透支（非短期下跌）",
                 a.sell_reason in ("fundamental", "overvalued"), f"sell_reason={a.sell_reason}")
@@ -2371,6 +2399,10 @@ def cmd_check_order(a):
             else:
                 chk("估值透支理由成立：卖出价已到透支线（透支线已含期权全额）",
                     limit > float(over), f"卖出限价 {limit}，透支线 {over}")
+        if a.sell_reason == "fundamental":
+            evidence = str(getattr(a, "fundamental_evidence", None) or "").strip()
+            chk("基本面减仓须提供已确认的恶化事实和来源", bool(evidence),
+                evidence or "用 --fundamental-evidence 提供触发项、已确认事实和来源")
     chk("行情数据为当日最新且已核对时间戳", a.data_fresh, "由分析结论传入 --data-fresh")
     all_pass = all(c["pass"] for c in checks)
     out({"ok": True, "code": code, "side": side, "shares": shares, "limit": limit,
@@ -2970,9 +3002,26 @@ def cmd_log(a):
     blocked = bool(blocked_valuations(v))
     zone = "估值待核" if blocked else (zone_of(v, p) if p else None)
     room = (0 if blocked else matrix_advice(zone, base["budget"], base["invested"], base["available"])["room_amount"]) if p else None
+    beijing = timezone(timedelta(hours=8))
+    written = datetime.now(beijing)
+    timestamps = {}
+    for key in ("quote_time", "trigger_time"):
+        value = getattr(a, key, None)
+        if value is None:
+            continue
+        try:
+            if len(value) < 16:
+                raise ValueError
+            timestamp = datetime.fromisoformat(value)
+        except ValueError:
+            die(f"{key} 须提供北京时间日期和时分，或提供带时区的 ISO 时间")
+        timestamp = timestamp.replace(tzinfo=beijing) if timestamp.tzinfo is None else timestamp.astimezone(beijing)
+        if timestamp > written:
+            die(f"{key} 晚于日志写入时间")
+        timestamps[key] = timestamp.isoformat(timespec="seconds")
     rec = {
-        "time": now(),
-        "date": datetime.now().strftime("%Y-%m-%d"),
+        "time": written.strftime("%Y-%m-%d %H:%M:%S"),
+        "date": written.date().isoformat(),
         "code": code,
         "session": a.session,
         "price": p,
@@ -2993,7 +3042,23 @@ def cmd_log(a):
         "volprice": a.volprice,
         "conclusion": a.conclusion,
         "report": a.report,
+        **timestamps,
     }
+    if getattr(a, "quote_source", None):
+        rec["quote_source"] = a.quote_source
+    if a.session in ("morning", "afternoon"):
+        core, swing = normalize_split(h)
+        profile = resolve_profile(data, h)
+        rec["decision_state"] = {
+            "shares": core + swing, "core_shares": core, "swing_shares": swing,
+            "cost": h.get("cost"), "lot_size": h.get("lot_size"), "quality_score": h.get("quality_score"),
+            "regret_aversion": profile["regret_aversion"], "entry_style": profile["entry_style"],
+            "entry_zone_ratio": profile["entry_zone_ratio"], "base_budget_ratio": profile["base_budget_ratio"],
+            "swing_quality_override": bool((h.get("profile") or {}).get("swing_quality_override")),
+            "base_values": {key: v.get(key) for key in ("base_low_price", "base_mid_price", "base_high_price")},
+            "option_capped_per_share": (v.get("option_value") or {}).get("capped_per_share"),
+            "anchor_revision": v.get("revised_at"),
+        }
 
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     rows, dropped = [], 0
@@ -3157,7 +3222,7 @@ def main():
     s.add_argument("--swing-buyback", action="store_true",
                    help="本次为波段买回：豁免建仓通道校验，改校验「≤卖价×0.95、≤fair_high、≤上轮卖出股数」")
     s.add_argument("--swing-sell-price", type=float, help="上一轮波段卖出价（波段买回必填）")
-    s.add_argument("--swing-sold-shares", type=int, help="上一轮波段卖出股数（可选，用于校验买回不超过卖出）")
+    s.add_argument("--swing-sold-shares", type=int, help="波段买回必填，上一轮实际卖出股数")
     s.add_argument("--swing-open", action="store_true",
                    help="本次为波段建仓（先买后卖）：不发建仓通道校验，改校验「必须给出计划卖出价、"
                          "卖出价≥买价×1.05、≤fair_high、金额≤可用资金」")
@@ -3171,6 +3236,9 @@ def main():
                    help="锚复评触发器已越界/到期时，已重跑四锚并确认本次买点用的是新锚")
     s.add_argument("--time-entry", action="store_true", help="本次为合理区内「时间换价格」底仓")
     s.add_argument("--fundamental-ok", action="store_true")
+    s.add_argument("--fundamental-evidence", help="基本面减仓必填，注明已确认触发项、事实和来源")
+    s.add_argument("--swing-stalling", action="store_true", help="由量价证据复核为高位放量滞涨")
+    s.add_argument("--swing-earnings-not-raised", action="store_true", help="先卖后买前已复核盈利预期未上修")
     s.add_argument("--valuation-ok", action="store_true", help="无作用：估值区由脚本按锚自动判定")
     s.add_argument("--data-fresh", action="store_true")
     s.set_defaults(fn=cmd_check_order)
@@ -3179,6 +3247,9 @@ def main():
     s.add_argument("--code", required=True); s.add_argument("--session", required=True,
                                                             choices=["deep", "morning", "afternoon", "adhoc"])
     s.add_argument("--price", type=float); s.add_argument("--conclusion", required=True)
+    s.add_argument("--quote-time", help="实际使用的报价记录时间，缺失时留空")
+    s.add_argument("--trigger-time", help="经调度记录核实的实际启动时间，缺失时留空")
+    s.add_argument("--quote-source", help="实际使用的报价来源")
     s.add_argument("--action", default="不动"); s.add_argument("--volprice"); s.add_argument("--report")
     s.add_argument("--action-type", choices=list(ACTION_TYPES),
                    help="动作类型（buy/sell/hold）；不填则从 --action 文本推断")

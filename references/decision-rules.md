@@ -418,9 +418,10 @@ portfolio.py set-profile --code 600096 --core-shares 800   # 1100 股中 800 为
 
 # 2) 先卖后买·第一腿（卖出）：必须同时给出买回价，校验"买回 ≤ 卖价×0.95"
 portfolio.py check-order --code 600096 --side sell --shares 300 --limit 26.80 \
-  --prev-close 26.50 --sell-reason swing --buyback-price 25.40 --data-fresh
+  --prev-close 26.50 --sell-reason swing --buyback-price 25.40 \
+  --swing-earnings-not-raised --fundamental-ok --data-fresh
 
-# 3) 先卖后买·第二腿（买回）：加 --swing-buyback 与 --swing-sell-price
+# 3) 先卖后买·第二腿（买回）：提供 --swing-sell-price 与 --swing-sold-shares
 #    校验「买回 ≤ 卖价×0.95、≤ fair_high、≤ 上轮卖出股数与回收金额」，豁免建仓通道
 portfolio.py check-order --code 600096 --side buy --shares 300 --limit 25.40 \
   --prev-close 26.50 --option-reviewed --fundamental-ok --data-fresh \
@@ -478,7 +479,7 @@ portfolio.py check-order --code 600096 --side sell --shares 300 --limit 26.51 \
 · 价格必须落在 A/B/C 某一建仓通道内；· 限价 ≤ `fair_high_price`；· 额度取自 `matrix.room_amount`。
 
 **以下两条只约束底仓卖出，不适用于波段兑现**：
-· 卖出理由 ∈ {基本面恶化, 估值透支}；· 以估值透支为由时，卖出价必须高于 `overvalued_above_price`，已触发估值复评时先重算。
+· 卖出理由 ∈ {基本面恶化, 估值透支}。基本面减仓用 `--fundamental-evidence` 附已确认触发项、事实与来源。估值透支减仓要求卖出价高于 `overvalued_above_price`，已触发估值复评时先重算。
 
 任一 fail，该笔**不可执行**，输出必须写明"不满足，放弃该笔"。用 `check-order` 生成校验表，不要口算。
 

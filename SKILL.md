@@ -193,6 +193,8 @@ python <skill>/scripts/portfolio.py path
 
 **按价值偏离分流（`references/decision-rules.md` 第 5 节）**：使用 `calc.value_gap`、`matrix.room_amount` 与当前仓位。已有底仓时仍检查 A/B 的加仓机会，并单独给出高估减仓的触发条件。用户选择波段时按第 7 节检查可行路径。
 
+早盘与尾盘写 `log` 时附 `--quote-time` 和 `--quote-source`。实际启动时间有调度记录时另传 `--trigger-time`。日志写入时间由脚本生成，报价或启动时间缺证据时留空。迟到的早盘结果明确标记为补录。
+
 **第一步永远是查驱动因子，不是看价格**（见 `references/drivers.md` 4.2）：
 
 1. 读 `calc` 返回的 `drivers`：`core` 是必查项，`stale` / `never_updated` 是要补的项。
@@ -227,7 +229,8 @@ python <skill>/scripts/portfolio.py path
 2. **明确动作**：买 / 卖 / 不动，并给出股数、限价、金额。判断为"不动"时不需要编造价位，但要说明"什么条件下才会动"。
 3. **空仓标的必须给"怎么才能买到"**：读 `calc` 的 `entry_plan`，说明三档通道的触发价，以及（若允许）时间换价格的轮次与累计上限。只写"等待回调"而不给路径，视为未完成。
 4. **硬约束逐条核对**：用 `check-order` 输出 pass/fail 表，任一 fail 则该笔不可执行。买入必须带 `--option-reviewed`，合理区底仓买入另需 `--time-entry`；波段买入用 `--swing-open` / `--swing-buyback`，卖出兑现用 `--swing-exit`。
-5. **尾盘纪律**（每条尾盘输出末尾原样附上）：
+5. **写入证据时点**：用 `log --quote-time --quote-source` 保存实际使用的报价时点和来源；有调度证据时传 `--trigger-time`。日志自动保留当时的画像、分桶、持股与估值状态。报价、启动或成交缺证据时标明待验证。
+6. **尾盘纪律**（每条尾盘输出末尾原样附上）：
    > 尾盘是新信息最少的时段，绝大多数日子正确答案是什么都不做。
 
 执行时机：显著估值偏离已复核且当次有效时段有可成交报价、流动性和额度时，可当次给分批限价方案。报价不足、价差过宽或证据待补时，写出下一次复核的价格与证据条件。
