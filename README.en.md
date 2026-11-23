@@ -43,7 +43,7 @@ Most "AI stock analysis" gets the **order** wrong: it reads the chart, then reve
 |---|---|---|
 | **01** | Factors first | "If this number changes, would I change next year's earnings forecast?" If yes, it is a driver. Price, candles, and analyst targets are not |
 | **02** | Two-sided valuation | Three base-value tiers + a priced option list; options discounted on the buy side, full on the sell side |
-| **03** | Rate denominator | The 10Y US Treasury yield is the only channel allowed to change multiples without changing earnings — it never touches EPS |
+| **03** | Adaptive valuation | Match the model to the source of value, such as cash flow, normalized earnings, or risk-adjusted NPV. Reflect rate sensitivity when supported by evidence |
 | **04** | Stateless | Each run depends only on current holdings and current price; a fresh session cannot inherit yesterday's bias |
 | **05** | Script adjudicates | `portfolio.py` owns every amount, share count, channel, and hard constraint — no mental math, no ad-hoc prices |
 | **06** | Delivery gates | `lint-report` (silent CSS failure), `selfcheck` (docs vs code drift), `check-order` (per-order constraints) |
@@ -163,7 +163,7 @@ value-investing-analysis/
 │   ├── cheatsheet.md                One-page quick reference (start here)
 │   ├── platform-adapters.md         Capability mapping and install paths
 │   ├── onboarding.md                Environment check and investor profiling
-│   ├── company-type.md              Six company archetypes
+│   ├── company-type.md              Sources of value, valuation methods, and stress scenarios
 │   ├── drivers.md                   Factor library, rate factor, factor chains
 │   ├── data-sources.md              Fields, freshness checks, fallback chain
 │   ├── fundamental-standard.md      Two-sided valuation, quality score, anchors

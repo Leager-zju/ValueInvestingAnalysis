@@ -184,6 +184,11 @@ MODEL_ENUM = {
     "pb_roe": "PB–ROE",
     "rnav": "重估净资产 RNAV",
     "normalized_eps": "正常化盈利",
+    "cashflow": "现金流估值",
+    "sotp": "分部加总估值",
+    "rnpv": "风险调整净现值",
+    "embedded_value": "内含价值",
+    "index_earnings": "指数盈利与净值",
 }
 MODEL_DEFAULT = {"slow_grower": "pe_band", "stalwart": "pe_band", "fast_grower": "peg",
                  "cyclical": "cape_pb", "turnaround": "normalized_eps", "asset_play": "rnav"}
@@ -197,14 +202,12 @@ STYLE_ENUM = {
 }
 STYLE_RATIO = {"left": 1.0, "swing": 0.5, "right": 0.0, "mixed": 0.33}
 STYLE_NOTE = {
-    "left": ["允许在整个合理区内分批承接（窗口 100%）",
-             "但摊薄有硬上限：累计不超过该标的 budget、每次加仓价须比上次低 5% 以上、最多 3 轮",
-             "跌破深度低估线后停止摊薄，改为观察 A 类信号"],
+    "left": ["C 通道默认窗口为合理区全段，仍须满足 C 的其余条件",
+             "低估时按 A/B 的证据与额度判断，价格下跌本身不构成加仓依据"],
     "swing": ["合理区下半段（窗口 50%）可建底仓",
-              "买贵了用『先卖后买』的波段修复，规则见 decision-rules 第 7 节",
+              "波段可双向执行，须预设出口并遵循 decision-rules 第 7 节",
               "波段买不回就接受少赚，不追高"],
-    "right": ["本框架不提供右侧追入：窗口 0%，只在底仓线及以下建仓",
-              "若确要做趋势仓，须单独记账、≤总资金 10%、并配移动止损，不计入价值仓"],
+    "right": ["默认窗口为 0，按底仓线及以下的 A/B 通道评估价值仓"],
     "mixed": ["合理区下三分之一（窗口 33%）建底仓",
               "每次加仓前先复核基本面，基本面未变才执行"],
 }
@@ -227,14 +230,14 @@ TYPE_ALIAS = {"growth": "fast_grower", "compounder": "stalwart",
               "周期": "cyclical", "成长": "fast_grower"}
 
 TYPE_FOCUS = {
-    "slow_grower": ["股息率与分红可持续性（FCF 覆盖 ≥1.2 倍）",
+    "slow_grower": ["股息率与可分配现金流对分红的覆盖",
                     "份额是否在流失",
                     "资本开支是否在无谓扩张",
                     "有没有用成长股的价钱买它"],
     "stalwart": ["ROE 的持续性而非单年高低",
                  "毛利率与提价的可持续性",
                  "份额与渠道库存",
-                 "涨到 30–50% 后是否该换股（成长有天花板）"],
+                 "增量资本回报与自由现金流是否匹配"],
     "fast_grower": ["增速的质量（是否靠补贴/并表/低价换量）",
                     "资本开支到收入的转化周期",
                     "增长故事能否具体到店/产品/时点",
@@ -242,7 +245,7 @@ TYPE_FOCUS = {
     "cyclical": ["产能周期位置（在建/现有）与库存",
                  "成本曲线位置（是否处于行业左侧）",
                  "价差与销量的边际变化",
-                 "CAPE/PB 分位，当期 PE 是陷阱"],
+                 "正常化盈利与可比周期的估值分位"],
     "turnaround": ["资产负债表能撑多久（现金/短债/到期结构）",
                    "正常化盈利的假设是否可验证",
                    "现金流转正的时点",
@@ -254,11 +257,11 @@ TYPE_FOCUS = {
 }
 
 TYPE_BREAK = {
-    "slow_grower": "分红率下调且无资本开支解释 / FCF 覆盖 <1 / 份额持续流失",
-    "stalwart": "ROE 中枢下移 >3pct / 毛利率连续 3 期累计降 ≥5pct 且份额流失",
-    "fast_grower": "增速连续 2 季降到个位数 / 预期连续下修 / capex 上升而收入不加速",
-    "cyclical": "在建产能 > 现有 30% / 成本曲线右移 / 价格跌破行业现金成本",
-    "turnaround": "现金流转正再推迟 2 个季度 / 债务展期失败 / 重组方退出",
+    "slow_grower": "现金分红覆盖持续不足 / 份额流失侵蚀稳态现金流",
+    "stalwart": "持续 ROE 或现金转化下移 / 毛利率与份额走弱",
+    "fast_grower": "增长偏离可验证目标 / 单位经济恶化 / 再投资回报走低",
+    "cyclical": "新增产能改变中枢供需 / 成本曲线位置恶化 / 景气低位威胁生存",
+    "turnaround": "超出原假设的进度延误 / 债务展期失败 / 重组方退出",
     "asset_play": "催化剂落空（出售/分立中止）/ 资产减值证实不可变现",
 }
 
@@ -513,11 +516,13 @@ def normalize_type(h):
         t.setdefault("confirmed", False)
         t.setdefault("basis", "")
         t.setdefault("counter_evidence", "")
+        if t.get("valuation_model") not in MODEL_ENUM:
+            t["valuation_model"] = (
+                "index_earnings" if str(t.get("instrument_type") or "").upper() == "ETF"
+                else MODEL_DEFAULT.get(prim)
+            )
         if prim:
             t["label"] = TYPE_ENUM[prim]
-            t.setdefault("valuation_model", MODEL_DEFAULT[prim])
-        if t.get("valuation_model") not in MODEL_ENUM:
-            t["valuation_model"] = MODEL_DEFAULT.get(prim)
         h["company_type"] = t
         return t
     if isinstance(t, str) and t.strip():
@@ -1045,16 +1050,29 @@ def cmd_plan_swing(a):
          "caveat": "按当前价与当前可用资金估算的上限；成交价不同需重算，实际股数以券商成交回报为准"})
 
 
+def valuation_method(ct):
+    return ct.get("primary"), ct.get("valuation_model")
+
+
+def flag_method_change(h, previous, current):
+    v = h.get("valuation")
+    if v and previous != current and any(
+        v.get(k) for k in ("core_entry_price", "fair_high_price", "overvalued_above_price")
+    ):
+        v["model_review_required"] = True
+
+
 def cmd_set_type(a):
     data = load()
     code, h = get_holding(data, a.code)
-    prim = a.primary
-    if prim not in TYPE_ENUM:
-        die(f"primary 必须是 {sorted(TYPE_ENUM)} 之一")
-    old_prim = (h.get("company_type") or {}).get("primary")
-    if old_prim in TYPE_ENUM and old_prim != prim and len(a.reason or "") < 6:
-        die("改判形态必须给出结构性理由（--reason）：增速连续 8 个季度跨越门槛 / 主业剥离 / "
-            "重整完成 / 注入落地。单季数据波动或股价涨跌不算理由")
+    prim = None if a.primary == "unclassified" else a.primary
+    old = h.get("company_type") or {}
+    old_prim, old_model = valuation_method(old)
+    model = a.model or (old_model if old_prim == prim else None) or MODEL_DEFAULT.get(prim)
+    if model not in MODEL_ENUM:
+        die(f"请通过 --model 指定估值方法，可选 {sorted(MODEL_ENUM)}")
+    if (old_prim or old_model) and (old_prim, old_model) != (prim, model) and not (a.reason or "").strip():
+        die("变更形态或估值方法须用 --reason 说明结构性证据或旧方法的适用性问题")
     tags = []
     for t in (a.tags or "").split(","):
         t = t.strip()
@@ -1064,18 +1082,16 @@ def cmd_set_type(a):
             die(f"tags 含未知标签：{t}；属性标签可选 {sorted(TAG_ENUM)}，也可填形态 key")
         if t != prim and t not in tags:
             tags.append(t)
-    model = a.model or MODEL_DEFAULT[prim]
-    if model not in MODEL_ENUM:
-        die(f"model 必须是 {sorted(MODEL_ENUM)} 之一")
     if len(a.basis or "") < 6:
         die("必须给出判定依据（至少两条量化证据：毛利率振幅、营收 CAGR、净利峰谷比、股息率、ROE 序列等）")
     if len(a.counter or "") < 4:
         die("必须给出一条反方证据（--counter）：支持相反分类的证据，写不出说明判定太随意")
 
     h["company_type"] = {
+        **old,
         "primary": prim,
         "tags": tags,
-        "label": TYPE_ENUM[prim],
+        "label": TYPE_ENUM.get(prim, MODEL_ENUM[model]),
         "valuation_model": model,
         "basis": a.basis,
         "counter_evidence": a.counter,
@@ -1083,24 +1099,24 @@ def cmd_set_type(a):
         "confirmed": bool(a.confirmed),
         "set_on": datetime.now().strftime("%Y-%m-%d"),
     }
-    if a.reason:
-        h["company_type"]["reason"] = a.reason
+    current = h["company_type"]
+    if a.reason and (old_prim, old_model) != (prim, model):
+        current["reason"] = a.reason
         h["company_type"].setdefault("history", []).append(
             {"date": datetime.now().strftime("%Y-%m-%d"), "from": old_prim,
-             "to": prim, "reason": a.reason})
+              "to": prim, "model_from": old_model, "model_to": model, "reason": a.reason})
+    flag_method_change(h, (old_prim, old_model), valuation_method(current))
     h["updated_at"] = now()
     save(data)
     warn = []
     if not a.confirmed:
-        warn.append("未标记为用户确认（confirmed=false），报告中须注明「性质未确认（自动判定）」")
-    if a.user_view:
-        warn.append("已记录用户的不同看法；按数据结论执行，并提高安全边际一档")
-    if model != MODEL_DEFAULT[prim]:
-        warn.append(f"估值范式 {model} 偏离该形态的默认值 {MODEL_DEFAULT[prim]}，请在报告中说明理由")
+        warn.append("类型与估值方法来自分析判定，请注明依据和置信度")
+    if h.get("valuation", {}).get("model_review_required"):
+        warn.append("类型或估值方法已变化，须按新方法重算基础价值及四锚")
     out({"ok": True, "code": code, "company_type": h["company_type"],
-         "model_label": MODEL_ENUM[model], "model_is_default": model == MODEL_DEFAULT[prim],
-         "type_focus": TYPE_FOCUS[prim],
-         "type_break_signal": TYPE_BREAK[prim],
+         "model_label": MODEL_ENUM[model], "model_is_default": model == MODEL_DEFAULT.get(prim),
+         "type_focus": TYPE_FOCUS.get(prim),
+         "type_break_signal": TYPE_BREAK.get(prim),
          "warnings": warn})
 
 
@@ -1323,11 +1339,18 @@ def cmd_set_thesis(a):
     bad = set(patch) - allowed
     if bad:
         die(f"不支持的字段：{sorted(bad)}，允许：{sorted(allowed)}")
+    previous_method = valuation_method(h.get("company_type") or {})
+    if "valuation" in patch:
+        valuation_patch = patch["valuation"]
+        if not isinstance(valuation_patch, dict) or "model_review_required" in valuation_patch:
+            die("valuation 必须为对象，model_review_required 由脚本管理")
     for k, v in patch.items():
         if isinstance(v, dict) and isinstance(h.get(k), dict):
             h[k].update(v)
         else:
             h[k] = v
+    if "company_type" in patch:
+        flag_method_change(h, previous_method, valuation_method(normalize_type(h)))
     warn = []
     if "quality_score" in patch:
         try:
@@ -1348,10 +1371,22 @@ def cmd_set_thesis(a):
         order = ["deep_value_price", "core_entry_price", "fair_high_price", "overvalued_above_price"]
         seq = [(k, v.get(k)) for k in order]
         if all(x[1] for x in seq):
-            nums = [float(x[1]) for x in seq]
-            if not all(nums[i] < nums[i + 1] for i in range(3)):
+            try:
+                nums = [float(x[1]) for x in seq]
+            except (TypeError, ValueError):
+                die("四锚必须为数值，未保存")
+            if not 0 < nums[0] < nums[1] < nums[2] < nums[3] < float("inf"):
                 die("估值锚顺序必须满足 deep_value < core_entry < fair_high < overvalued_above，"
                     f"当前为 {dict(seq)}，未保存")
+            base_fields = ("base_low_price", "base_mid_price", "base_high_price")
+            if all(k in valuation_patch for k in (*order, *base_fields)):
+                try:
+                    low, mid, high = (float(valuation_patch[k]) for k in base_fields)
+                except (TypeError, ValueError):
+                    die("基础价值三档必须为数值，未保存")
+                if not 0 < low <= mid <= high < float("inf"):
+                    die("基础价值必须满足 0 < base_low <= base_mid <= base_high，未保存")
+                v.pop("model_review_required", None)
             # 一致性检查：deep_value 与 core_entry×(1−安全边际) 的偏离
             q = h.get("quality_score")
             m = margin_for(q) if q is not None else None
@@ -1600,13 +1635,14 @@ def build_entry_plan(v, p, avail, lot, quality, prefs_regime, ra, zone_ratio=0.3
     _inv = (float(budget) - float(avail)) if (budget not in (None, 0)) else 0.0
     _inv_pct = (_inv / float(budget) * 100) if (budget not in (None, 0)) else 0.0
     base_built = bool(budget not in (None, 0) and _inv > float(budget) / 3 + 1e-6)
-    te_allowed = bool(rg["time_entry"] and q is not None and q >= 8 and avail > 0
+    zone_cap = round(entry + zone_ratio * (fh - entry), 4) if (entry and fh) else fh
+    te_allowed = bool(entry and zone_cap and zone_cap > entry
+                      and rg["time_entry"] and q is not None and q >= 8 and avail > 0
                       and (v.get("option_value") or {}).get("capped_per_share")
                       and not base_built)
     # 「时间换价格」不在整个合理区启用，只在合理区下部这一段：既缓解踏空，也不在合理区上半部追
-    zone_cap = round(entry + zone_ratio * (fh - entry), 4) if (entry and fh) else fh
     te = {"allowed": te_allowed, "reason": "", "zone_cap": zone_cap,
-          "zone_ratio": zone_ratio, "active_now": bool(zone_cap and p <= zone_cap),
+          "zone_ratio": zone_ratio, "active_now": bool(te_allowed and entry < p <= zone_cap),
           "base_built": base_built, "invested_pct_at_review": round(_inv_pct, 2)}
     if te_allowed:
         per_round = avail / 6
@@ -1622,6 +1658,8 @@ def build_entry_plan(v, p, avail, lot, quality, prefs_regime, ra, zone_ratio=0.3
         })
     else:
         why = []
+        if not entry or not zone_cap or zone_cap <= entry:
+            why.append("合理区内没有启用的建仓窗口")
         if not rg["time_entry"]:
             why.append("踏空厌恶非 high（当前 %s）" % rg_name)
         if q is None or q < 8:
@@ -1742,15 +1780,16 @@ def cmd_calc(a):
     if prim:
         res["type_focus"] = TYPE_FOCUS[prim]
         res["type_break_signal"] = TYPE_BREAK[prim]
-        res["valuation_model"] = {"key": ct.get("valuation_model"),
-                                  "label": MODEL_ENUM.get(ct.get("valuation_model")),
-                                  "is_default": ct.get("valuation_model") == MODEL_DEFAULT[prim]}
-        if ct.get("counter_evidence"):
-            res["counter_evidence"] = ct["counter_evidence"]
-        if ct.get("user_view"):
-            res["user_view"] = ct["user_view"]
+    model = ct.get("valuation_model")
+    if model:
+        res["valuation_model"] = {"key": model, "label": MODEL_ENUM[model],
+                                  "is_default": model == MODEL_DEFAULT.get(prim)}
     else:
-        res["type_warning"] = "公司性质未判定：先跑 set-type，否则分析重点与估值方法都可能用错"
+        res["type_warning"] = "未登记适用的估值方法：请先核对价值来源和数据，再跑 set-type"
+    if ct.get("counter_evidence"):
+        res["counter_evidence"] = ct["counter_evidence"]
+    if ct.get("user_view"):
+        res["user_view"] = ct["user_view"]
     if not ct.get("confirmed"):
         res["type_unconfirmed"] = True
     dv = normalize_drivers(h)
@@ -1788,11 +1827,11 @@ def cmd_calc(a):
         res["position_split"] = {
             "shares": int(h["shares"]), "core_shares": _core_sh, "swing_shares": _swing_sh,
             "swing_pct": round(_swing_sh / int(h["shares"]) * 100, 1),
-            "max_swing_per_trade": min(_swing_sh, int(h["shares"]) // 3),
+            "max_swing_per_trade": _swing_sh,
             "swing_cash": round(max(avail, 0), 2),
             "core_cost_basis": round(_core_sh * cost, 2),
             "split_configured": bool(h.get("split_configured")),
-            "note": (("底仓 %d 股不参与波段；波段仓 %d 股仅可先卖后买（先卖后买，卖出须给买回价）"
+            "note": (("底仓 %d 股不参与波段；波段仓 %d 股可双向操作，须预设另一端价格"
                       % (_core_sh, _swing_sh)) if _swing_sh
                      else (("底仓 %d 股已锁定，波段仓当前 0 股；可用波段资金 %.2f 元待部署"
                             % (_core_sh, max(avail, 0))) if h.get("split_configured")
@@ -1827,7 +1866,8 @@ def cmd_calc(a):
     res["valuation_zone_by_price"] = zone_of(v, p)
     # 折现率因子必须可追溯：有 10Y 因子但没记基准 → 禁止改锚，只能写定性说明
     _rate_items = [x for x in (h.get("drivers") or {}).get("items") or []
-                   if isinstance(x, dict) and x.get("category") == "rate"]
+                   if isinstance(x, dict) and x.get("category") == "rate"
+                   and x.get("beta_rate") not in (None, "", 0, "0", "0.0")]
     if _rate_items:
         _rb = (v or {}).get("rate_baseline")
         _rv = _rate_items[0].get("latest_value")
@@ -1851,8 +1891,11 @@ def cmd_calc(a):
         "discount_to_entry_pct": round((1 - p / float(entry)) * 100, 2) if entry else None,
         "premium_to_overvaluation_pct": round((p / float(over) - 1) * 100, 2) if over else None,
         "anchor_review_required": bool(_rk["triggered"] or _rk["event_due"] or
-                                       res.get("option_stale") or res["anchor_revision"]["is_stale"]),
+                                        res.get("option_stale") or res["anchor_revision"]["is_stale"] or
+                                        v.get("model_review_required")),
     }
+    if v.get("model_review_required"):
+        res["model_warning"] = "估值方法或形态已变更，须用 set-thesis 提交基础价值三档与四锚"
     if _rk["triggered"] or _rk["event_due"]:
         res["reanchor_warning"] = _rk["verdict"]
     if v.get("deep_value_price"):
@@ -1870,7 +1913,7 @@ def cmd_calc(a):
     _all = [res.get(k) for k in ("warning", "type_warning", "driver_warning",
                                  "option_warning", "option_stale", "holding_stale",
                                  "price_warning", "emotion_guard", "rate_warning",
-                                 "reanchor_warning")]
+                                 "reanchor_warning", "model_warning")]
     res["warnings"] = [x for x in _all if x]
     out({"ok": True, **res})
 
@@ -2052,6 +2095,9 @@ def cmd_check_order(a):
             f"限价 {limit}，昨收 {prev_close}")
     v = h.get("valuation") or {}
     if side == "buy" or a.sell_reason == "overvalued":
+        if v.get("model_review_required"):
+            chk("估值方法变更后已重算基础价值与四锚", False,
+                "用 set-thesis 在同一次更新中提交基础价值三档及四锚")
         _rk = check_reanchor(v, h)
         if _rk["triggered"] or _rk["event_due"]:
             _hits = [str(x.get("desc") or x.get("id"))
@@ -2086,7 +2132,7 @@ def cmd_check_order(a):
         if a.swing_open:
             # 波段建仓（先买后卖）。decision-rules 7.4：波段仓的买入**不受建仓通道与矩阵 room 限制**，
             # 因为它不是长期敞口，用「必须在低估区买」去管它，等于把波段变成第二份底仓。
-            # 改由「必须给出卖出价 + 5% 价差 + 规模上限 35% + 总投入不超 budget」约束。
+            # 校验计划卖出价、价差、合理上沿以及可用资金。
             _tsp = a.target_sell_price
             chk("波段建仓必须同时给出计划卖出价（不给卖出价，那就只是加仓）", bool(_tsp),
                 ("计划卖出 %s" % _tsp) if _tsp else "缺失 --target-sell-price")
@@ -2624,8 +2670,11 @@ def cmd_selfcheck(a):
             ck(code, "基础价值三档递增", bl <= bm <= bh, "%.2f / %.2f / %.2f" % (bl, bm, bh))
         except (TypeError, ValueError):
             ck(code, "基础价值三档递增", False, "基础价值缺失")
-        _pct = ((v.get("option_value") or {}).get("pct_of_base_mid"))
-        ck(code, "期权占比未超 30% 上限", _pct is None or float(_pct) <= 30.0001, str(_pct))
+        option = compute_option(v)
+        raw, threshold = option["total_per_share"], option["cap_base"]
+        expected = raw if threshold is None else raw - 0.5 * max(raw - threshold, 0)
+        ck(code, "期权超过软阈值的部分按半价计入",
+           abs(option["capped_per_share"] - expected) <= 0.00015, str(option["pct_of_base_mid"]))
         if v.get("deep_value_price") and budget > 0:
             base_built = basis > budget / 3 + 1e-6
             px = last_px.get(code)
@@ -2811,6 +2860,8 @@ def cmd_log(a):
         "price": p,
         "zone": zone_of(v, p) if p else None,
         "anchors": anchors,
+        "valuation_model": (h.get("company_type") or {}).get("valuation_model"),
+        "model_review_required": bool(v.get("model_review_required")),
         "action_type": a.action_type or _infer_action_type(a.action),
         "action": a.action,
         "target_price": a.target_price,
@@ -2945,13 +2996,13 @@ def main():
 
     s = sp.add_parser("set-type")
     s.add_argument("--code", required=True)
-    s.add_argument("--primary", required=True, choices=sorted(TYPE_ENUM))
+    s.add_argument("--primary", required=True, choices=[*sorted(TYPE_ENUM), "unclassified"])
     s.add_argument("--model", choices=sorted(MODEL_ENUM), help="估值范式，默认由形态推导")
     s.add_argument("--tags", help="补充标签，逗号分隔，最多 2 个")
     s.add_argument("--basis", required=True, help="判定依据：至少两条量化证据")
     s.add_argument("--counter", required=True, help="反方证据：一条支持相反分类的证据")
     s.add_argument("--user-view", help="用户与数据判定不一致时的用户看法（不改写数据结论）")
-    s.add_argument("--reason", help="改判形态时的结构性理由（形态发生变化时必填）")
+    s.add_argument("--reason", help="变更已登记形态或估值方法时的证据")
     s.add_argument("--confirmed", action="store_true", help="用户已确认该性质")
     s.set_defaults(fn=cmd_set_type)
 
@@ -2984,7 +3035,7 @@ def main():
     s.add_argument("--swing-sold-shares", type=int, help="上一轮波段卖出股数（可选，用于校验买回不超过卖出）")
     s.add_argument("--swing-open", action="store_true",
                    help="本次为波段建仓（先买后卖）：不发建仓通道校验，改校验「必须给出计划卖出价、"
-                        "卖出价≥买价×1.05、≤fair_high、波段仓不超底仓 35%%、总投入≤budget」")
+                         "卖出价≥买价×1.05、≤fair_high、金额≤可用资金」")
     s.add_argument("--target-sell-price", type=float, help="波段建仓的计划卖出价（--swing-open 必填）")
     s.add_argument("--swing-exit", action="store_true",
                    help="本次为波段兑现（先买后卖的第二腿）：豁免买回价，改校验「卖出价 ≥ 买入价×1.05」")
