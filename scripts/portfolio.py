@@ -666,6 +666,12 @@ REANCHOR_DIRS = ("up", "down", "review_only")
 REANCHOR_OPS = (">=", "<=")
 
 
+def blocked_valuations(v):
+    return {t["id"] for t in (v.get("reanchor_triggers") or [])
+            if isinstance(t, dict) and t.get("type") == "event"
+            and t.get("blocking") is True and t.get("id")}
+
+
 def check_reanchor(v, h, today=None):
     """
     锚复评触发器：因子越过事先写死的阈值 → 强制重跑锚，而不是在旧锚上找买点。
@@ -767,7 +773,10 @@ def cmd_set_reanchor(a):
     code, h = get_holding(data, a.code)
     v = h.setdefault("valuation", {})
     cur = [x for x in (v.get("reanchor_triggers") or []) if isinstance(x, dict)]
+    blocking = blocked_valuations(v)
     if a.clear:
+        if blocking:
+            die("估值审计阻断须通过 set-thesis 提交完整重估及证据后解除")
         cur = []
     if a.file:
         with open(a.file, "r", encoding="utf-8") as f:
@@ -787,7 +796,12 @@ def cmd_set_reanchor(a):
                 if it.get("direction", "review_only") not in REANCHOR_DIRS:
                     die("direction 只能是 %s，收到 %r"
                         % (list(REANCHOR_DIRS), it.get("direction")))
-            by_id[it.get("id") or it.get("desc")] = it
+            key = it.get("id") or it.get("desc")
+            if key in blocking and (it.get("blocking") is not True or it.get("type") != "event"):
+                die("估值审计阻断不能通过 set-reanchor 解除")
+            if it.get("blocking") is True and (it.get("type") != "event" or not it.get("id")):
+                die("估值审计阻断须为带 ID 的事件")
+            by_id[key] = it
         cur = list(by_id.values())
     today = datetime.now().strftime("%Y-%m-%d")
     for spec in (a.observe or []):
@@ -1398,6 +1412,14 @@ def cmd_set_thesis(a):
         valuation_patch = patch["valuation"]
         if not isinstance(valuation_patch, dict) or "model_review_required" in valuation_patch:
             die("valuation 必须为对象，model_review_required 由脚本管理")
+        current = h.get("valuation") or {}
+        if "reanchor_triggers" in valuation_patch and blocked_valuations(current) - blocked_valuations(valuation_patch):
+            fields = ("base_low_price", "base_mid_price", "base_high_price", "deep_value_price",
+                      "core_entry_price", "fair_high_price", "overvalued_above_price")
+            proof = valuation_patch.get("audit_evidence")
+            if (not all(valuation_patch.get(k) for k in fields) or not isinstance(proof, dict)
+                    or not all(proof.get(k) for k in ("bridge", "crosscheck", "invalidates", "sources"))):
+                die("解除估值审计阻断须提交有效的基础价值三档、四锚、估值推导、交叉验证、证伪条件和来源")
     for k, v in patch.items():
         if isinstance(v, dict) and isinstance(h.get(k), dict):
             h[k].update(v)
@@ -1929,7 +1951,11 @@ def cmd_calc(a):
                       "请核对 budget 是否设错" % avail)
     if _fresh:
         res["price_warning"] = "；".join(_fresh)
-    res["valuation_zone_by_price"] = zone_of(v, p)
+    blocked = bool(blocked_valuations(v))
+    res["valuation_execution_blocked"] = blocked
+    res["valuation_zone_by_price"] = "估值待核" if blocked else zone_of(v, p)
+    if blocked:
+        res["valuation_warning"] = "估值审计有待完成。旧锚仅供审计，暂停用于买入和估值透支减仓"
     # 折现率因子必须可追溯：有 10Y 因子但没记基准 → 禁止改锚，只能写定性说明
     _rate_items = [x for x in (h.get("drivers") or {}).get("items") or []
                    if isinstance(x, dict) and x.get("category") == "rate"
@@ -1954,32 +1980,36 @@ def cmd_calc(a):
     entry = v.get("core_entry_price")
     over = v.get("overvalued_above_price")
     res["value_gap"] = {
-        "discount_to_entry_pct": round((1 - p / float(entry)) * 100, 2) if entry else None,
-        "premium_to_overvaluation_pct": round((p / float(over) - 1) * 100, 2) if over else None,
+        "discount_to_entry_pct": round((1 - p / float(entry)) * 100, 2) if entry and not blocked else None,
+        "premium_to_overvaluation_pct": round((p / float(over) - 1) * 100, 2) if over and not blocked else None,
         "anchor_review_required": bool(_rk["triggered"] or _rk["event_due"] or
                                         res.get("option_stale") or res["anchor_revision"]["is_stale"] or
-                                        v.get("model_review_required")),
+                                        v.get("model_review_required") or blocked),
     }
     if v.get("model_review_required"):
         res["model_warning"] = "估值方法或形态已变更，须用 set-thesis 提交基础价值三档与四锚"
     if _rk["triggered"] or _rk["event_due"]:
         res["reanchor_warning"] = _rk["verdict"]
-    if v.get("deep_value_price"):
+    if v.get("deep_value_price") and not blocked:
         res["entry_plan"] = build_entry_plan(v, p, base["available"], lot,
                                              h.get("quality_score"), ra, ra,
                                              _prof["entry_zone_ratio"], base["budget"], base["invested"])
     # 决策矩阵脚本化：报告回答「还能加多少」只能引用 room_amount
-    res["matrix"] = matrix_advice(res.get("valuation_zone_by_price") or zone_of(v, p),
+    res["matrix"] = matrix_advice(zone_of(v, p),
                                   base["budget"], base["invested"], base["available"])
     # 波段额度独立成块：与底仓矩阵是两套账，互不套用
     res["swing"] = swing_advice(h, p, funds["swing"]["available"], lot,
                                 (v or {}).get("fair_high_price"), h.get("quality_score"))
+    if blocked:
+        res["matrix"].update({"room_amount": 0, "action": "估值待核，暂停依旧锚下单"})
+        res["swing"].update({"eligible": False, "can_open_shares": 0, "can_open_amount": 0,
+                             "reason": res["valuation_warning"]})
     if not v:
         res["warning"] = "未设置估值锚：禁止给出任何买入建议，先跑 option + set-thesis。"
     _all = [res.get(k) for k in ("warning", "type_warning", "driver_warning",
                                  "option_warning", "option_stale", "holding_stale",
                                  "price_warning", "emotion_guard", "rate_warning",
-                                 "reanchor_warning", "model_warning")]
+                                 "reanchor_warning", "model_warning", "valuation_warning")]
     res["warnings"] = [x for x in _all if x]
     out({"ok": True, **res})
 
@@ -2162,6 +2192,9 @@ def cmd_check_order(a):
             f"限价 {limit}，昨收 {prev_close}")
     v = h.get("valuation") or {}
     if side == "buy" or a.sell_reason == "overvalued":
+        pending = blocked_valuations(v)
+        if pending:
+            chk("估值审计已通过", False, "待解除：" + "、".join(sorted(pending)))
         if v.get("model_review_required"):
             chk("估值方法变更后已重算基础价值与四锚", False,
                 "用 set-thesis 在同一次更新中提交基础价值三档及四锚")
@@ -2523,6 +2556,8 @@ def _render_index(rows):
             badges += ' <span class="badge b-fair">质地 %s/10</span>' % r["quality"]
         badges += (' <span class="badge b-buy">%s · 窗口 %.0f%%</span>'
                    % (r["style"], r["zone_ratio"] * 100))
+        if r.get("valuation_pending"):
+            badges += ' <span class="badge b-over">估值待核</span>'
         if r.get("anchor_rev"):
             _cls = "b-over" if r.get("anchor_stale") else "b-fair"
             badges += (' <span class="badge %s">锚 %s</span>' % (_cls, r["anchor_rev"][5:]))
@@ -2880,6 +2915,7 @@ def cmd_index(a):
                      "drivers": dv.get("count", 0),
                      "anchor_rev": str(_rev_raw)[:10] or None,
                      "anchor_stale": bool(_rev_age is not None and _rev_age > 120),
+                     "valuation_pending": bool(blocked_valuations(h.get("valuation") or {})),
                      "option_due": int(((h.get("valuation") or {}).get("option_value") or {})
                                        .get("due_count") or 0),
                      "policy_n": len(dv.get("policy_active") or []),
@@ -2931,8 +2967,9 @@ def cmd_log(a):
     budget = float(h.get("budget") or 0)
     funds = bucket_funds(h, budget)
     base = funds["base"]
-    zone = zone_of(v, p) if p else None
-    room = matrix_advice(zone, base["budget"], base["invested"], base["available"])["room_amount"] if zone else None
+    blocked = bool(blocked_valuations(v))
+    zone = "估值待核" if blocked else (zone_of(v, p) if p else None)
+    room = (0 if blocked else matrix_advice(zone, base["budget"], base["invested"], base["available"])["room_amount"]) if p else None
     rec = {
         "time": now(),
         "date": datetime.now().strftime("%Y-%m-%d"),
@@ -2948,6 +2985,7 @@ def cmd_log(a):
         "anchors": anchors,
         "valuation_model": (h.get("company_type") or {}).get("valuation_model"),
         "model_review_required": bool(v.get("model_review_required")),
+        "valuation_execution_blocked": blocked,
         "action_type": a.action_type or _infer_action_type(a.action),
         "action": a.action,
         "target_price": a.target_price,
