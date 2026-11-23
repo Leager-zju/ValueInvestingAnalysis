@@ -1454,7 +1454,7 @@ def matrix_advice(zone, budget, invested, avail):
     elif zone == "透支区":
         cap_pct = inv_pct / 100
         action = ("不买" if inv_pct <= 0
-                  else "按减仓纪律处理（减 1/3；已投≥2/3 减至 1/2 预算）")
+                  else "复核显著高估；经偏乐观情景检验仍透支时考虑减仓")
     else:
         return {"zone": zone, "inv_pct": round(inv_pct, 2), "cap_pct": None,
                 "cap_amount": None, "room_amount": None,
@@ -1845,6 +1845,14 @@ def cmd_calc(a):
     # 好让报告把「锚该重评了」写在「买点在哪」的前面。
     _rk = check_reanchor(v, h)
     res["reanchor"] = _rk
+    entry = v.get("core_entry_price")
+    over = v.get("overvalued_above_price")
+    res["value_gap"] = {
+        "discount_to_entry_pct": round((1 - p / float(entry)) * 100, 2) if entry else None,
+        "premium_to_overvaluation_pct": round((p / float(over) - 1) * 100, 2) if over else None,
+        "anchor_review_required": bool(_rk["triggered"] or _rk["event_due"] or
+                                       res.get("option_stale") or res["anchor_revision"]["is_stale"]),
+    }
     if _rk["triggered"] or _rk["event_due"]:
         res["reanchor_warning"] = _rk["verdict"]
     if v.get("deep_value_price"):
@@ -2042,25 +2050,24 @@ def cmd_check_order(a):
     else:
         chk("限价偏离昨收不超过 ±10%（港美股无涨跌停，防误填）", abs(limit / prev_close - 1) <= 0.10,
             f"限价 {limit}，昨收 {prev_close}")
+    v = h.get("valuation") or {}
+    if side == "buy" or a.sell_reason == "overvalued":
+        _rk = check_reanchor(v, h)
+        if _rk["triggered"] or _rk["event_due"]:
+            _hits = [str(x.get("desc") or x.get("id"))
+                     for x in (_rk["triggered"] + _rk["event_due"])]
+            chk("锚复评已触发 → 必须先重跑锚（旧锚价位失效）", a.anchor_reviewed,
+                "已复核并重跑锚" if a.anchor_reviewed
+                else "触发项：" + "；".join(_hits) +
+                     "。先 option + set-thesis 重算四锚，再带 --anchor-reviewed 重下这笔单")
+
     if side == "buy":
-        v = h.get("valuation") or {}
         ra, _rg = regime_of(data)
         fh = v.get("fair_high_price")
         entry = v.get("core_entry_price")
         deep = v.get("deep_value_price")
         ov = v.get("option_value") or {}
         q = h.get("quality_score")
-
-        # ⓪ 锚复评闸门：事先写死的因子阈值已越界 / 事件已到期 → 旧锚失效，
-        # 这笔单必须先重跑锚再下，否则就是把「锚已经不对了」的买点当有效买点。
-        _rk = check_reanchor(v, h)
-        if _rk["triggered"] or _rk["event_due"]:
-            _hits = [str(x.get("desc") or x.get("id"))
-                     for x in (_rk["triggered"] + _rk["event_due"])]
-            chk("锚复评已触发 → 必须先重跑锚（旧锚算出的买点无效）", a.anchor_reviewed,
-                "已复核并重跑锚" if a.anchor_reviewed
-                else "触发项：" + "；".join(_hits) +
-                     "。先 option + set-thesis 重算四锚，再带 --anchor-reviewed 重下这笔单")
 
         # ① 期权必须显式评估过（可以为空，但不能"没想过"）
         chk("上行期权已评估（含显式确认该标的无可定价期权）", a.option_reviewed,
@@ -2149,6 +2156,8 @@ def cmd_check_order(a):
                           f"时间换价格≤{round(zone_cap, 2) if zone_cap is not None else '—'}"
                           f"，即合理区下 {_zr:.0%} 段）")
             chk("价格落在可执行的建仓通道内", channel != "无可用通道", detail)
+            if channel in ("深度低估通道", "低估区建底仓"):
+                chk("A/B 通道质地至少 6 分", q is not None and float(q) >= 6, f"质地={q}")
 
             # ④ 合理区内买入必须走「时间换价格」，且有门槛
             if channel == "时间换价格底仓":
@@ -2163,16 +2172,14 @@ def cmd_check_order(a):
 
             # ⑤ 金额与分批
             chk("买入金额不超过该标的可用资金", amount <= avail + 1e-6, f"拟用 {amount:,.2f}，可用 {avail:,.2f}")
+            room = matrix_advice(zone_of(v, limit), budget, basis, max(avail, 0))["room_amount"]
+            chk("买入金额不超过底仓矩阵额度", room is not None and amount <= room + 1e-6,
+                f"拟用 {amount:,.2f}，底仓额度 {room}")
             cap = avail * ratio_cap
-            min_lot_amt = limit * lot
             cap_label = ("单笔不超过该标的可用资金（通道上限已放开至全额）" if ratio_cap >= 0.999
                          else f"单笔不超过可用资金 {ratio_cap:.0%}（{channel}累计上限，非通道比例）")
-            if ratio_cap and min_lot_amt > cap:
-                chk(cap_label, amount <= min_lot_amt + 1e-6,
-                    f"一手金额 {min_lot_amt:,.2f} 已超单笔上限 {cap:,.2f}，降级为「最多买一手」")
-            else:
-                chk(cap_label, bool(ratio_cap) and amount <= cap + 1e-6,
-                    f"拟用 {amount:,.2f}，上限 {cap:,.2f}（可用 {avail:,.2f}）")
+            chk(cap_label, bool(ratio_cap) and amount <= cap + 1e-6,
+                f"拟用 {amount:,.2f}，上限 {cap:,.2f}（可用 {avail:,.2f}）")
             if avail > 0:
                 cap_info = {"cap_ratio": ratio_cap, "cap_amount": round(cap, 2),
                             "amount_pct_of_avail": round(amount / avail * 100, 2),
@@ -2183,7 +2190,6 @@ def cmd_check_order(a):
 
         chk("基本面未恶化（无 A1–A7 信号）", a.fundamental_ok, "由分析结论传入 --fundamental-ok")
     if side == "sell":
-        v = h.get("valuation") or {}
         over = v.get("overvalued_above_price")
         core_sh, swing_sh = normalize_split(h)
         chk("卖出股数不超过持股", shares <= h.get("shares", 0), f"拟卖 {shares}，持有 {h.get('shares', 0)}")
@@ -2223,7 +2229,7 @@ def cmd_check_order(a):
                     "在此之前只能用 fundamental（基本面恶化）作为卖出理由")
             else:
                 chk("估值透支理由成立：卖出价已到透支线（透支线已含期权全额）",
-                    limit >= float(over) - 1e-9, f"卖出限价 {limit}，透支线 {over}")
+                    limit > float(over), f"卖出限价 {limit}，透支线 {over}")
     chk("行情数据为当日最新且已核对时间戳", a.data_fresh, "由分析结论传入 --data-fresh")
     all_pass = all(c["pass"] for c in checks)
     out({"ok": True, "code": code, "side": side, "shares": shares, "limit": limit,
