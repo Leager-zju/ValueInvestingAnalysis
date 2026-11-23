@@ -40,6 +40,7 @@
   · 期权价值超过基础价值中枢 30% 的部分按 50% 计入，防止"讲故事式估值"
 """
 import argparse
+from hashlib import sha256
 import json
 import math
 import os
@@ -47,6 +48,7 @@ import re
 import sys
 from datetime import datetime, date, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 try:
     sys.stdout.reconfigure(encoding="utf-8")
@@ -2168,6 +2170,49 @@ def cmd_volprice(a):
 # ---------------------------------------------------------------- 硬约束校验
 def cmd_check_order(a):
     data = load()
+    checked_at = datetime.now(timezone(timedelta(hours=8)))
+    result = check_order(a, data, checked_at.date())
+    if getattr(a, "evidence_file", None) and a.side != "hold" and result["all_pass"]:
+        receipt = {
+            "checked_at": checked_at.isoformat(timespec="seconds"),
+            "rule_hash": sha256(Path(__file__).read_bytes()).hexdigest(),
+            "inputs": {k: v for k, v in vars(a).items() if k not in ("fn", "evidence_file")},
+            "context": order_context(data, a.code),
+            "result": result,
+        }
+        try:
+            receipt["id"] = order_receipt_id(receipt)
+            serialized = json.dumps(receipt, ensure_ascii=False, indent=2, allow_nan=False)
+            with Path(a.evidence_file).open("x", encoding="utf-8") as stream:
+                stream.write(serialized + "\n")
+        except (OSError, ValueError) as error:
+            die(f"无法保存订单凭证：{error}")
+        result = {**result, "receipt_id": receipt["id"]}
+    out(result)
+
+
+def order_receipt_id(receipt):
+    content = {k: receipt[k] for k in ("checked_at", "rule_hash", "inputs", "context", "result")}
+    return sha256(json.dumps(content, ensure_ascii=False, sort_keys=True, allow_nan=False).encode("utf-8")).hexdigest()
+
+
+def order_context(data, code):
+    code, holding = get_holding(data, code)
+    fields = ("name", "market", "currency", "budget", "lot_size", "shares", "core_shares", "swing_shares",
+              "cost", "profile", "quality_score", "valuation", "drivers")
+    prefs = data.get("prefs") or {}
+    return {"prefs": {key: prefs[key] for key in ("regret_aversion", "entry_style", "entry_zone_ratio") if key in prefs},
+            "holdings": {code: {key: holding[key] for key in fields if key in holding}}}
+
+
+def replay_order(receipt):
+    if order_receipt_id(receipt) != receipt["id"]:
+        raise ValueError("决策凭证的校验和不一致")
+    today = datetime.fromisoformat(receipt["checked_at"]).date()
+    return check_order(SimpleNamespace(**receipt["inputs"]), receipt["context"], today)
+
+
+def check_order(a, data, as_of):
     code, h = get_holding(data, a.code)
     side = a.side
     shares = int(a.shares)
@@ -2184,8 +2229,7 @@ def cmd_check_order(a):
 
     if side == "hold":
         chk("不动", True, "无订单，无需校验金额/股数/限价")
-        out({"ok": True, "code": code, "side": side, "all_pass": True, "checks": checks})
-        return
+        return {"ok": True, "code": code, "side": side, "all_pass": True, "checks": checks}
 
     chk("持仓金额币种与市场口径一致", h.get("currency") == holding_currency(code, h),
         f"台账 {h.get('currency')}，要求 {holding_currency(code, h)}")
@@ -2200,8 +2244,7 @@ def cmd_check_order(a):
     chk("限价与昨收均为有限正数", valid_prices, f"限价 {limit}，昨收 {prev_close}")
     lim = price_limit_pct(code, h.get("name", ""))
     if not valid_prices:
-        out({"ok": True, "code": code, "side": side, "all_pass": False, "checks": checks})
-        return
+        return {"ok": True, "code": code, "side": side, "all_pass": False, "checks": checks}
     if lim is not None:
         up, dn = round(prev_close * (1 + lim), 2), round(prev_close * (1 - lim), 2)
         chk("限价在涨跌停范围内", dn <= limit <= up, f"限价 {limit}，允许 [{dn}, {up}]（±{lim:.0%}）")
@@ -2216,7 +2259,7 @@ def cmd_check_order(a):
         if v.get("model_review_required"):
             chk("估值方法变更后已重算基础价值与四锚", False,
                 "用 set-thesis 在同一次更新中提交基础价值三档及四锚")
-        _rk = check_reanchor(v, h)
+        _rk = check_reanchor(v, h, today=as_of)
         if _rk["triggered"] or _rk["event_due"]:
             _hits = [str(x.get("desc") or x.get("id"))
                      for x in (_rk["triggered"] + _rk["event_due"])]
@@ -2413,10 +2456,10 @@ def cmd_check_order(a):
                 evidence or "用 --fundamental-evidence 提供触发项、已确认事实和来源")
     chk("行情数据为当日最新且已核对时间戳", a.data_fresh, "由分析结论传入 --data-fresh")
     all_pass = all(c["pass"] for c in checks)
-    out({"ok": True, "code": code, "side": side, "shares": shares, "limit": limit,
+    return {"ok": True, "code": code, "side": side, "shares": shares, "limit": limit,
          "amount": round(amount, 2), "currency": holding_currency(code, h),
          "regret_aversion": regime_of(data)[0],
-         "all_pass": all_pass, "checks": checks, **cap_info})
+         "all_pass": all_pass, "checks": checks, **cap_info}
 
 
 # ---------------------------------------------------------------- 分析日志
@@ -3069,6 +3112,40 @@ def cmd_log(a):
         }
 
     DATA_DIR.mkdir(parents=True, exist_ok=True)
+    receipt_file = getattr(a, "order_check_file", None)
+    if receipt_file:
+        if a.session != "afternoon" or rec["action_type"] not in ("buy", "sell"):
+            die("订单凭证用于尾盘买卖建议")
+        if not rec.get("quote_time") or not rec.get("quote_source") or p is None or not math.isfinite(p) or p <= 0:
+            die("尾盘买卖建议须有报价、报价时间和来源")
+        try:
+            receipt = json.loads(Path(receipt_file).read_text(encoding="utf-8-sig"))
+            checked_at = datetime.fromisoformat(receipt["checked_at"])
+            quoted_at = datetime.fromisoformat(rec["quote_time"])
+            result = receipt["result"]
+            if (order_receipt_id(receipt) != receipt["id"]
+                    or receipt["rule_hash"] != sha256(Path(__file__).read_bytes()).hexdigest()
+                    or receipt["context"] != order_context(data, code)
+                    or not result["all_pass"] or result["code"] != code or result["side"] != rec["action_type"]
+                    or (a.target_price is not None and a.target_price != result["limit"])
+                    or checked_at.date() != written.date() or quoted_at.date() != written.date()
+                    or not quoted_at <= checked_at <= written):
+                raise ValueError("凭证与当前建议、时点或持仓不一致，请重新校验")
+        except (OSError, TypeError, ValueError, KeyError) as error:
+            die(f"订单凭证不可用：{error}")
+        rec.update(receipt_id=receipt["id"], order_shares=result["shares"], target_price=result["limit"])
+        archive = DATA_DIR / "decision_history"
+        archive.mkdir(exist_ok=True)
+        record = {"receipt": receipt, "published_at": written.isoformat(timespec="seconds"),
+                  "quote_time": rec["quote_time"], "quote_source": rec["quote_source"], "quote_price": p}
+        try:
+            with (archive / f'{receipt["id"]}.json').open("x", encoding="utf-8") as stream:
+                json.dump(record, stream, ensure_ascii=False, indent=2, allow_nan=False)
+        except FileExistsError:
+            pass
+    elif a.session == "afternoon" and rec["action_type"] in ("buy", "sell"):
+        die("尾盘买卖建议须使用 --order-check-file 关联已通过的订单凭证")
+
     rows, dropped = [], 0
     if LOG.exists():
         for line in LOG.read_text(encoding="utf-8").splitlines():
@@ -3250,6 +3327,7 @@ def main():
     s.add_argument("--swing-earnings-not-raised", action="store_true", help="先卖后买前已复核盈利预期未上修")
     s.add_argument("--valuation-ok", action="store_true", help="无作用：估值区由脚本按锚自动判定")
     s.add_argument("--data-fresh", action="store_true")
+    s.add_argument("--evidence-file", help="将通过的买卖校验及当时输入写入新 JSON 文件")
     s.set_defaults(fn=cmd_check_order)
 
     s = sp.add_parser("log")
@@ -3259,6 +3337,7 @@ def main():
     s.add_argument("--quote-time", help="实际使用的报价记录时间，缺失时留空")
     s.add_argument("--trigger-time", help="经调度记录核实的实际启动时间，缺失时留空")
     s.add_argument("--quote-source", help="实际使用的报价来源")
+    s.add_argument("--order-check-file", help="尾盘买卖建议对应的 check-order 凭证")
     s.add_argument("--action", default="不动"); s.add_argument("--volprice"); s.add_argument("--report")
     s.add_argument("--action-type", choices=list(ACTION_TYPES),
                    help="动作类型（buy/sell/hold）；不填则从 --action 文本推断")

@@ -238,7 +238,7 @@ python <skill>/scripts/portfolio.py path
 2. **明确动作**：买 / 卖 / 不动，并给出股数、限价、金额。判断为"不动"时不需要编造价位，但要说明"什么条件下才会动"。
 3. **空仓标的必须给"怎么才能买到"**：读 `calc` 的 `entry_plan`，说明三档通道的触发价，以及（若允许）时间换价格的轮次与累计上限。只写"等待回调"而不给路径，视为未完成。
 4. **硬约束逐条核对**：用 `check-order` 输出 pass/fail 表，任一 fail 则该笔不可执行。买入必须带 `--option-reviewed`，合理区底仓买入另需 `--time-entry`；波段买入用 `--swing-open` / `--swing-buyback`，卖出兑现用 `--swing-exit`。
-5. **写入证据时点**：用 `log --quote-time --quote-source` 保存实际使用的报价时点和来源；有调度证据时传 `--trigger-time`。日志自动保留当时的画像、分桶、持股与估值状态。报价、启动或成交缺证据时标明待验证。
+5. **写入证据时点**：用 `log --quote-time --quote-source` 保存实际使用的报价时点和来源；有调度证据时传 `--trigger-time`。日志自动保留当时的画像、分桶、持股与估值状态。对买卖建议，用 `check-order --evidence-file <新凭证.json>` 保存通过的校验，再用 `log --order-check-file <凭证.json>` 关联。发布的凭证归档于数据目录下的 `decision_history/`，同日复跑保留已发布的买卖凭证。报价、启动或成交缺证据时标明待验证。
 6. **尾盘纪律**（每条尾盘输出末尾原样附上）：
    > 尾盘是新信息最少的时段，绝大多数日子正确答案是什么都不做。
 
