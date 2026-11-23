@@ -106,7 +106,7 @@ python <skill>/scripts/portfolio.py path
 | `calc --code C --price P [--price-time T]` | 盈亏、五档估值区、`value_gap`（距底仓线折价、距透支线溢价、是否需复评）、预算、建仓阶梯、期权、政策 |
 | `volprice --file k.json [--market A\|HK] [--elapsed M]` | 量价五态初判 |
 | `check-order --code C --side buy/sell/hold ...` | 按硬约束逐条校验一笔拟下单（全部只读当前状态；买入需 `--option-reviewed`，合理区买入需 `--time-entry`，**锚复评已触发/事件到期时另需 `--anchor-reviewed`**）。**波段另有三条独立通道**：先卖后买 `--buyback-price` / `--swing-buyback`；先买后卖 `--swing-open --target-sell-price`，兑现 `--swing-exit --swing-entry-price`——这三条都**豁免建仓通道与 `matrix.room_amount`**，改由 5% 价差、`fair_high`、买价 ≤ `fair_high`÷1.05 自己管；规模不设比例上限（波段仓 = 总持仓 − 底仓，自动派生）|
-| `log --code C --session morning/afternoon/deep --conclusion "..." [--action-type] [--target-price] [--expected]` | 写**当日**埋点：同标的+同任务+同日只留最新一条（重复触发覆盖）；自动附加区间与四锚快照 |
+| `log --code C --session morning/afternoon/deep --conclusion "..." [--action-type] [--target-price] [--expected]` | 写**当日**埋点：同标的+同任务+同日只留最新一条（重复触发覆盖）；自动附加区间、四锚、币种、分桶和可买额度快照 |
 | `last-log [--code C]` | 回看历史结论，**仅用于审计，不参与本次决策**（无状态原则） |
 | `markets` | 列出持仓涉及市场（决定跑哪个时点的任务） |
 | `plan-swing --code C --price P [--ratio R]` | 按可用资金算最多可买股数，给**建议波段比例**并按比例划分底仓/波段仓（取整到每手） |
@@ -300,6 +300,7 @@ python <skill>/scripts/portfolio.py lint-report --code C --session deep     # �
 - **记日志时尽量带结构化字段**：`--action-type buy|sell|hold`、有明确价位时给 `--target-price`、有方向判断时给 `--expected up|down|flat`。这些是日后复盘唯一可统计的原料——**现在不做分析，但不存就永远没有历史**。同一标的同一天重复触发会覆盖旧记录，不用担心堆积。
 - **结尾必须提醒回报持仓**：固定一句「成交后把券商显示的**持股数**和**成本价**告诉我，我按你给的覆盖」。**系统不提供"按成交价推算成本"的功能**——各券商佣金/过户费不同，推算必有偏差，只认券商真值（`upsert --shares --cost`）。持仓快照超过 30 天未核对时 `calc` 会返回 `holding_stale`（分红送股会不成交也改股数），报告里要提示核对。
 - **有持仓就必须写「仓位分桶」一行**：底仓 X 股 / 波段仓 Y 股；若未分桶（Y=0），明确写"全部视为底仓，卖出必须基于基本面或估值"。波段建议必须同时给出**另一端的价格**——先卖后写给买回价，先买后卖给计划卖出价（`--swing-open --target-sell-price`）。没写出口的，不许叫波段。
+- **报告和日志使用同一个有效报价**：`log --price` 与报告及 `calc --price` 一致。比对日志的 `currency`、`budget_split`、`base_buy_room`、`swing_buy_power` 与报告。缺少有效报价时省略 `--price`，日志的底仓可买额度为空，报告注明待核，波段只可展示资金上限。
 - **底仓额度与波段额度必须分两行写，不许合并成一句「还能加多少」**：底仓看 `matrix.room_amount`，波段看 `swing.buy_power`。设分桶比例时一并展示 `calc.budget_split` 的预算、已投和可用额。波段买入不受建仓价位约束（不看 deep/entry/zone_cap），这是它和底仓最根本的区别；把它按底仓的价位管，等于要求波段仓位也必须是长期仓位。
 - **任何买入价位必须能追溯到 `calc` 的字段**（`entry_plan.tier*_core/tier2_add/tier3_deep` / `entry_plan.time_entry.zone_cap` / `matrix.room_amount` / `valuation.*_price`）。**不许在正文里即兴给一个价格。**
   · **典型的真实错误**：正文里写了「22 元买点」，脚本里根本没有 22 这个锚，用户据此以为框架要求他等到 −17%，直接判为"让我空仓踏空"。**即兴数字的成本不是写错一个数，是让整套框架失去可信度。**

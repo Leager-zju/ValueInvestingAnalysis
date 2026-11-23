@@ -398,6 +398,13 @@ def bucket_funds(h, budget):
     return result
 
 
+def budget_split_snapshot(h, funds):
+    if (h.get("profile") or {}).get("base_budget_ratio") is None:
+        return None
+    return {key: {field: round(value, 2) for field, value in bucket.items()}
+            for key, bucket in funds.items()}
+
+
 def cmd_show(a):
     data = load()
     ra, rg = regime_of(data)
@@ -1798,9 +1805,9 @@ def cmd_calc(a):
         "position_state_label": {"空仓": "未投入", "底仓": "已投 ≤1/3",
                                  "半仓": "已投 1/3–2/3", "重仓": "已投 ≥2/3"}.get(state, state),
     }
-    if (h.get("profile") or {}).get("base_budget_ratio") is not None:
-        res["budget_split"] = {key: {field: round(value, 2) for field, value in bucket.items()}
-                               for key, bucket in funds.items()}
+    split = budget_split_snapshot(h, funds)
+    if split is not None:
+        res["budget_split"] = split
     v = h.get("valuation") or {}
     for key in ("deep_value_price", "core_entry_price", "fair_high_price", "overvalued_above_price"):
         if v.get(key):
@@ -2918,13 +2925,26 @@ def cmd_log(a):
     anchors = {k: v.get(k) for k in ("deep_value_price", "core_entry_price",
                                      "fair_high_price", "overvalued_above_price")}
     p = float(a.price) if a.price is not None else None
+    currency = holding_currency(code, h)
+    if h.get("currency") != currency:
+        die("持仓记录币种与市场口径不一致，请先核对金额并修正台账")
+    budget = float(h.get("budget") or 0)
+    funds = bucket_funds(h, budget)
+    base = funds["base"]
+    zone = zone_of(v, p) if p else None
+    room = matrix_advice(zone, base["budget"], base["invested"], base["available"])["room_amount"] if zone else None
     rec = {
         "time": now(),
         "date": datetime.now().strftime("%Y-%m-%d"),
         "code": code,
         "session": a.session,
         "price": p,
-        "zone": zone_of(v, p) if p else None,
+        "zone": zone,
+        "currency": currency,
+        "budget": budget,
+        "budget_split": budget_split_snapshot(h, funds),
+        "base_buy_room": room,
+        "swing_buy_power": round(funds["swing"]["available"], 2),
         "anchors": anchors,
         "valuation_model": (h.get("company_type") or {}).get("valuation_model"),
         "model_review_required": bool(v.get("model_review_required")),
