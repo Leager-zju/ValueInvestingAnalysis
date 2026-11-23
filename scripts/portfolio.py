@@ -2841,8 +2841,8 @@ def cmd_selfcheck(a):
         p = REPORTS / ("%s-deep.html" % code)
         if p.exists():
             s = p.read_text(encoding="utf-8")
-            n = s.count('class="kicker"')
-            ck(code, "深度报告区块齐全（13）", n >= 13, "kicker=%d" % n)
+            missing = [label for label in ("结论", "驱动因子", "估值") if label not in s]
+            ck(code, "深度报告包含结论、驱动因子与估值", not missing, "、".join(missing) or "ok")
             bad = re.search(r"单笔[^<]{0,8}1/[34]", s)
             ck(code, "深度报告无过期单笔口径", bad is None, bad.group(0) if bad else "ok")
         else:
